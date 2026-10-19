@@ -87,7 +87,10 @@ class SpeechRequestValidator:
         required_speech_reference_count: int | None = None,
         speech_reference_text_required: bool = False,
         speech_reference_text_excludes_instructions: bool = False,
+        speech_dual_stream_supported: bool = False,
         additional_speech_languages: frozenset[str] = frozenset(),
+        speech_empty_input_task_types: frozenset[str] = frozenset(),
+        speech_native_speed_control: bool = False,
         max_speech_input_chars: int | None = MAX_SPEECH_INPUT_CHARS,
         allowed_local_media_path: str | Path | None = None,
         allowed_media_domains: list[str] | None = None,
@@ -96,11 +99,13 @@ class SpeechRequestValidator:
     ) -> None:
         if tts_batch_max_items < 1:
             raise ValueError("tts_batch_max_items must be greater than 0")
+        # 0 is a valid count: the model rejects every reference (e.g. a
+        # speaker-token variant conditions on text alone).
         if (
             required_speech_reference_count is not None
-            and required_speech_reference_count < 1
+            and required_speech_reference_count < 0
         ):
-            raise ValueError("required_speech_reference_count must be greater than 0")
+            raise ValueError("required_speech_reference_count must not be negative")
         if max_speech_input_chars is not None and (
             isinstance(max_speech_input_chars, bool)
             or not isinstance(max_speech_input_chars, int)
@@ -130,10 +135,13 @@ class SpeechRequestValidator:
         )
         self.required_speech_reference_count = required_speech_reference_count
         self.speech_reference_text_required = speech_reference_text_required
+        self.speech_dual_stream_supported = speech_dual_stream_supported
         self.max_speech_input_chars = max_speech_input_chars
         self.speech_reference_text_excludes_instructions = (
             speech_reference_text_excludes_instructions
         )
+        self.speech_empty_input_task_types = speech_empty_input_task_types
+        self.speech_native_speed_control = speech_native_speed_control
         supported_languages = SUPPORTED_TTS_LANGUAGES | frozenset(
             additional_speech_languages
         )
@@ -229,8 +237,15 @@ class SpeechRequestValidator:
             uploaded_voice=prepared_references.uploaded_voice,
         )
 
-    def validate_input_text(self, input_text: str) -> None:
-        if not isinstance(input_text, str) or not input_text.strip():
+    def validate_input_text(
+        self, input_text: str, *, task_type: str | None = None
+    ) -> None:
+        if not isinstance(input_text, str):
+            raise bad_request("input must be a non-empty string", param="input")
+        if not input_text.strip():
+            # Edit-style tasks carry their content in the reference audio.
+            if task_type in self.speech_empty_input_task_types:
+                return
             raise bad_request("input must be a non-empty string", param="input")
         limit = self.max_speech_input_chars
         if limit is not None and len(input_text) > limit:
@@ -242,7 +257,12 @@ class SpeechRequestValidator:
     def prepare_generation_updates(
         self, request: CreateSpeechRequest
     ) -> dict[str, Any]:
-        self.validate_input_text(request.input)
+        task_type = (
+            normalize_task_type(request.task_type)
+            if request.task_type is not None
+            else None
+        )
+        self.validate_input_text(request.input, task_type=task_type)
         updates: dict[str, Any] = {}
         response_format = normalize_response_format(request.response_format)
         if request.stream and response_format != "pcm":
@@ -260,9 +280,10 @@ class SpeechRequestValidator:
                 param="speed",
             )
 
-        if request.task_type is not None:
-            updates["task_type"] = normalize_task_type(request.task_type)
+        if task_type is not None:
+            updates["task_type"] = task_type
         self.validate_custom_voice_request(request, task_type=updates.get("task_type"))
+        self.validate_extra_params(request)
         if request.language is not None:
             updates["language"] = self.normalize_language(request.language)
 
@@ -307,6 +328,29 @@ class SpeechRequestValidator:
             param="voice",
         )
 
+    def validate_extra_params(self, request: CreateSpeechRequest) -> None:
+        """Gate the model-specific extra_params this deployment supports."""
+        extra = request.extra_params
+        if extra is None:
+            return
+        if "dual_stream" in extra:
+            if not isinstance(extra["dual_stream"], bool):
+                raise bad_request(
+                    "extra_params.dual_stream must be a boolean",
+                    param="extra_params",
+                )
+            if extra["dual_stream"] and not self.speech_dual_stream_supported:
+                raise bad_request(
+                    "extra_params.dual_stream requires a dual-stream-capable "
+                    "checkpoint (this deployment does not support it)",
+                    param="extra_params",
+                )
+        if "style" in extra and extra["style"] is not None:
+            if not isinstance(extra["style"], str):
+                raise bad_request(
+                    "extra_params.style must be a string", param="extra_params"
+                )
+
     def normalize_language(self, value: str) -> str:
         normalized = self._tts_language_aliases.get(value.strip().lower())
         if normalized is None:
@@ -321,7 +365,16 @@ class SpeechRequestValidator:
     ) -> None:
         references = prepared_references.reference_descriptors
         required_count = self.required_speech_reference_count
-        if required_count is not None and len(references) != required_count:
+        if required_count == 0 and references:
+            raise bad_request(
+                "this model does not accept speech references",
+                param="ref_audio" if request.ref_audio is not None else "references",
+            )
+        if (
+            required_count is not None
+            and required_count > 0
+            and len(references) != required_count
+        ):
             count = "one" if required_count == 1 else str(required_count)
             param = "ref_audio" if not references else "references"
             raise bad_request(
@@ -390,6 +443,13 @@ class SpeechRequestValidator:
             reference_descriptors=reference_descriptors,
             uploaded_voice=uploaded_voice,
         )
+
+    def resolve_encode_speed(self, request: CreateSpeechRequest) -> float:
+        """The encode-time speed factor; 1.0 when the model consumes speed
+        natively (an instruction), so the post-process must not double-apply."""
+        if self.speech_native_speed_control:
+            return 1.0
+        return float(request.speed)
 
     def build_generate_request(
         self,
@@ -527,7 +587,7 @@ class SpeechRequestValidator:
                 gen_req,
                 request_id=request_id,
                 response_format=prepared.request.response_format,
-                speed=prepared.request.speed,
+                speed=self.resolve_encode_speed(prepared.request),
                 allow_format_fallback=False,
             )
         except ClientError as exc:
@@ -539,6 +599,7 @@ class SpeechRequestValidator:
             format=result.format,
             media_type=result.mime_type,
             finish_reason=result.finish_reason,
+            text=result.text,
         )
 
     async def prepare_batch_item_request(
@@ -691,6 +752,11 @@ class SpeechRequestValidator:
         return uploaded_voice
 
     def validate_raw_payload(self, payload: dict[str, Any]) -> None:
+        if "extra_params" in payload and payload["extra_params"] is not None:
+            if not isinstance(payload["extra_params"], dict):
+                raise bad_request(
+                    "extra_params must be an object", param="extra_params"
+                )
         for field_name in (
             "model",
             "input",
@@ -897,7 +963,7 @@ def build_speech_prompt(
 
 
 def build_extra_params(request: CreateSpeechRequest) -> dict[str, Any]:
-    extra_params: dict[str, Any] = {}
+    extra_params: dict[str, Any] = dict(request.extra_params or {})
     if request.initial_codec_chunk_frames is not None:
         extra_params[INITIAL_CODEC_CHUNK_FRAMES_PARAM] = (
             request.initial_codec_chunk_frames

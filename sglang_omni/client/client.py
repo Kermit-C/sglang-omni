@@ -273,6 +273,7 @@ class Client:
             sample_rate=sample_rate,
             usage=last_chunk.usage if last_chunk else None,
             finish_reason=last_chunk.finish_reason if last_chunk else None,
+            text=last_chunk.text if last_chunk else None,
         )
 
     # ------------------------------------------------------------------

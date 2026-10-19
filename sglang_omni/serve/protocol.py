@@ -304,7 +304,9 @@ SUPPORTED_TTS_LANGUAGES = frozenset(
         "Italian",
     }
 )
-SUPPORTED_TTS_TASK_TYPES = frozenset({"Base", "CustomVoice", "VoiceDesign"})
+SUPPORTED_TTS_TASK_TYPES = frozenset(
+    {"Base", "CustomVoice", "VoiceDesign", "SemanticEdit", "AcousticEdit"}
+)
 TTS_SPEED_MIN = 0.25
 TTS_SPEED_MAX = 4.0
 DEFAULT_TTS_BATCH_MAX_ITEMS = 32
@@ -368,6 +370,9 @@ class CreateSpeechRequest(BaseModel):
 
     # Per-stage overrides (sglang-omni specific)
     stage_params: dict[str, dict[str, Any]] | None = None
+    # Model-specific extra parameters, passed through to the pipeline
+    # verbatim (e.g. FireRedTTS3 speaker variant: dual_stream, style).
+    extra_params: dict[str, Any] | None = None
 
 
 class SpeechBatchItem(BaseModel):
@@ -403,6 +408,7 @@ class SpeechBatchItem(BaseModel):
     repetition_penalty: Any = None
     seed: Any = None
     stage_params: Any = None
+    extra_params: Any = None
 
 
 class CreateSpeechBatchRequest(BaseModel):
@@ -438,6 +444,7 @@ class CreateSpeechBatchRequest(BaseModel):
     repetition_penalty: float | None = None
     seed: int | None = None
     stage_params: dict[str, dict[str, Any]] | None = None
+    extra_params: dict[str, Any] | None = None
 
 
 class SpeechBatchResult(BaseModel):
@@ -449,6 +456,7 @@ class SpeechBatchResult(BaseModel):
     format: str | None = None
     media_type: str | None = None
     finish_reason: str | None = None
+    text: str | None = None  # synthesis text byproduct (voice plan / edits)
     error: dict[str, Any] | None = None
 
 
@@ -495,6 +503,7 @@ class SpeechStreamSessionConfig(BaseModel):
     repetition_penalty: float | None = None
     seed: int | None = None
     stage_params: dict[str, dict[str, Any]] | None = None
+    extra_params: dict[str, Any] | None = None
 
 
 class UploadedVoiceMetadata(BaseModel):

@@ -233,6 +233,9 @@ class SpeechResult:
     sample_rate: int | None = None
     usage: UsageInfo | None = None
     finish_reason: str | None = None
+    # Text byproduct of the synthesis (e.g. a voice plan / edited transcript),
+    # when the pipeline produces one.
+    text: str | None = None
 
 
 class ClientError(Exception):

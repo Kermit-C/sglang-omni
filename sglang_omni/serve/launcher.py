@@ -441,6 +441,11 @@ async def run_server(
             speech_reference_text_excludes_instructions=(
                 pipeline_config.speech_reference_text_excludes_instructions
             ),
+            speech_empty_input_task_types=(
+                pipeline_config.speech_empty_input_task_types
+            ),
+            speech_native_speed_control=(pipeline_config.speech_native_speed_control),
+            speech_dual_stream_supported=(pipeline_config.speech_dual_stream_supported),
             additional_speech_languages=pipeline_config.additional_speech_languages,
             max_speech_input_chars=pipeline_config.max_speech_input_chars,
             enable_realtime=enable_realtime,
