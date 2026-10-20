@@ -108,9 +108,9 @@ curl -X POST http://localhost:8000/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{
     "model": "FireRedTTS3-Instruct",
-    "input": "晚上好，欢迎收听今天的节目。这段声音由开源引擎实时合成。",
+    "input": "今天天气很好，我们一起去公园散步吧。",
     "task_type": "VoiceDesign",
-    "instructions": "A young woman with a gentle voice, speaking slowly.",
+    "instructions": "一个年轻女性的温柔嗓音，语速稍慢，带一点俏皮。",
     "seed": 42
   }' \
   --output voice_design.wav
@@ -121,18 +121,30 @@ curl -X POST http://localhost:8000/v1/audio/speech \
 ```bash
 curl -X POST http://localhost:8000/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "FireRedTTS3-Instruct",
-    "input": "",
-    "task_type": "SemanticEdit",
-    "instructions": "Replace 公园 with 游乐园.",
-    "ref_audio": "docs/_static/audio/ref_voice.wav",
-    "seed": 42
-  }' \
-  --output semantic_edit.wav
+  --data-binary @- --output semantic_edit.wav <<'JSON'
+{
+  "model": "FireRedTTS3-Instruct",
+  "input": "",
+  "task_type": "SemanticEdit",
+  "instructions": "Replace 'birthday' with 'anniversary'.",
+  "ref_audio": "docs/_static/audio/ref_voice.wav",
+  "seed": 42
+}
+JSON
 ```
 
+For substitutions, use `Replace 'source' with 'target'.` with single quotes
+around both words. The quoted example above succeeded in a local ASR check;
+omitting quotes did not perform the intended replacement on the same audio.
+The `x-gen-text` response header contains edit masks, not a literal transcript
+of the generated audio. The replacement word may appear only in the audio.
+The heredoc preserves the instruction's single quotes in the shell command.
+
 `AcousticEdit` keeps the content and adjusts one acoustic attribute. The instruction comes from `instructions` verbatim, or is composed from `acoustic_attribute` (`Speed` / `Pitch` / `Volume`) and a value — the top-level `speed` field doubles as the Speed value:
+
+Raw instructions must use the trained templates: `adjust the speed to 0.8x`,
+`shift the pitch by 2 steps`, or `adjust the volume to 0.8`, for example.
+Free-form acoustic descriptions are unsupported.
 
 ```bash
 curl -X POST http://localhost:8000/v1/audio/speech \
