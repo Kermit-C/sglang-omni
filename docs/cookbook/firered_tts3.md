@@ -21,7 +21,7 @@ One architecture, three checkpoints. The variant is detected from the checkpoint
 |---|---|---|---|
 | Example config | `examples/configs/firered_tts3_base.yaml` | `examples/configs/firered_tts3_instruct.yaml` | `examples/configs/firered_tts3_speaker.yaml` |
 | Voice condition | Reference clip: CAM++ speaker embedding + in-context prompt latents | Reference clip as in-context prompt (tts task) or edit source | Built-in speaker token; no reference audio |
-| Tasks | Voice cloning only | `tts`, `VoiceDesign`, `SemanticEdit`, `AcousticEdit` | Text-only `tts` |
+| Tasks | Voice cloning only | `Base` (cloning), `VoiceDesign`, `SemanticEdit`, `AcousticEdit` | Text-only speech |
 | Default CFG | 2.0 | 2.0 (tts) / 1.2 (design, edits) | 1.2 |
 | `max_patches` | 400 (~64 s) | 400 | 600 (~96 s) |
 | Default `flow_mode` | `compile_bf16` | `fp32` (see below) | `compile_bf16` |
@@ -48,7 +48,7 @@ The examples below read local clips; allow their directories with `--allowed-loc
 
 ## Synthesizing Speech
 
-### Voice Cloning (Base, and the Instruct tts task)
+### Voice Cloning (Base and Instruct)
 
 Base takes exactly one reference clip plus its transcript; the transcript is prefixed to the input so the model can align prompt audio with prompt text. A wrong transcript hurts cloning quality.
 
@@ -61,14 +61,16 @@ curl -X POST http://localhost:8000/v1/audio/speech \
     "language": "Chinese",
     "references": [{
       "audio_path": "docs/_static/audio/ref_voice.wav",
-      "text": "今天天气很好，我们一起去公园散步吧。"
+      "text": "It was the night before my birthday. Hooray! It’s almost here! It may not be a holiday, but it’s the best day of the year."
     }],
     "seed": 42
   }' \
   --output output.wav
 ```
 
-`ref_audio` / `ref_text` are accepted as a shorthand for `references[0].audio_path` / `references[0].text`. `language` defaults to `Chinese`; the checkpoint tags cover 24 languages plus 21 Chinese dialect tags (`ZH_Sichuan`, `ZH_Shanghai`, ...).
+`ref_audio` / `ref_text` are accepted as a shorthand for `references[0].audio_path` / `references[0].text`. `language` defaults to `Chinese`. The API accepts `Chinese`, `English`, `Japanese`, `Korean`, `German`, `French`, `Russian`, `Portuguese`, `Spanish`, and `Italian`. `Auto` is not supported.
+
+To allow other checkpoint language or dialect tags (such as `ZH_Sichuan`), extend the Python pipeline config class `sglang_omni.models.firered_tts3.config.FireRedTTS3PipelineConfig` and set its `additional_speech_languages: ClassVar[frozenset[str]]` to those tags. This attribute is inherited from `PipelineConfig`; it is a class attribute, not a YAML field or a stage factory setting. The stock FireRedTTS3 config does not add any languages.
 
 ### Streaming
 
@@ -82,7 +84,7 @@ curl -N -X POST http://localhost:8000/v1/audio/speech \
     "input": "欢迎使用点点语音合成系统，这是一段零样本音色克隆测试。",
     "references": [{
       "audio_path": "docs/_static/audio/ref_voice.wav",
-      "text": "今天天气很好，我们一起去公园散步吧。"
+      "text": "It was the night before my birthday. Hooray! It’s almost here! It may not be a holiday, but it’s the best day of the year."
     }],
     "stream": true,
     "response_format": "pcm",
@@ -97,7 +99,7 @@ The WebSocket protocol at `/v1/audio/speech/stream` (session.config → input.te
 
 ### Instruction Tasks (Instruct)
 
-The Instruct checkpoint adds three tasks on top of cloning. `task_type` accepts `VoiceDesign`, `SemanticEdit`, `AcousticEdit` (case- and separator-insensitive; `Base`/`TTS` mean the cloning task).
+The Instruct checkpoint adds three tasks on top of cloning. `task_type` accepts `VoiceDesign`, `SemanticEdit`, and `AcousticEdit` (case- and separator-insensitive). Omit `task_type` or use `Base` for cloning; `TTS` and `tts` are rejected with HTTP 400.
 
 `VoiceDesign` synthesizes a voice from a text description — no reference audio, `instructions` required:
 
@@ -183,25 +185,25 @@ curl -N -X POST http://localhost:8000/v1/audio/speech \
 
 ### Request Parameters
 
-Top-level fields (the endpoint drops unknown top-level keys silently — model knobs belong in `stage_params` / `tts_params` / `extra_params`):
+Top-level fields (the endpoint drops unknown top-level keys silently — model knobs belong in `stage_params` / `extra_params`):
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `model` | string | served model | Served model identifier |
 | `input` | string | (required) | Text to synthesize; at most 400 characters. May be empty for SemanticEdit / AcousticEdit |
-| `references` | list | variant | One item with `audio_path` + `text`. Required for Base and the Instruct tts task (both fields) and the edit tasks (audio only); forbidden for the Speaker variant and VoiceDesign |
+| `references` | list | variant | One item with `audio_path` + `text`. Required for Base and Instruct cloning (both fields) and the edit tasks (audio only); forbidden for the Speaker variant and VoiceDesign |
 | `ref_audio` / `ref_text` | string | `null` | Shorthand for `references[0]` |
 | `response_format` | string | `"wav"` | Output format; `pcm` required when `stream` is true |
 | `stream` | bool | `false` | Stream raw 24 kHz PCM chunks |
 | `seed` | int | `null` | Per-request flow-sampler seed; fixed seed + fixed request is bit-exact |
-| `language` | string | `"Chinese"` | Language tag for Base (24 languages + 21 ZH dialect tags) |
-| `task_type` | string | `"tts"` | Instruct tasks: `VoiceDesign` / `SemanticEdit` / `AcousticEdit` (`Base`/`TTS` = cloning) |
+| `language` | string | `"Chinese"` | Language tag for Base: `Chinese`, `English`, `Japanese`, `Korean`, `German`, `French`, `Russian`, `Portuguese`, `Spanish`, `Italian`. Other checkpoint tags require the pipeline config class's `additional_speech_languages` (see above); `Auto` is unsupported |
+| `task_type` | string | omitted (cloning) | Instruct tasks: `Base` (cloning) / `VoiceDesign` / `SemanticEdit` / `AcousticEdit`; `TTS` and `tts` are rejected |
 | `instructions` | string | `null` | VoiceDesign description, SemanticEdit instruction, or a raw AcousticEdit template |
 | `speed` | float | `1.0` | Consumed natively by AcousticEdit as the Speed value ("adjust the speed to Nx"); ignored by other tasks |
 | `temperature` / `top_p` / `top_k` | | task defaults | Instruct text-phase sampling overrides only; the audio phase never samples |
 | `max_new_tokens` | int | derived | Engine decode-step budget; rarely needed — the pipeline derives it from `max_patches` (dual-stream: `3 * max_patches + 20`) |
 
-Solver and stop knobs ride under `stage_params.talker` (canonical) or `tts_params`:
+Solver and stop knobs ride under `stage_params.talker`:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -219,7 +221,7 @@ curl -X POST http://localhost:8000/v1/audio/speech \
     "model": "FireRedTTS3-Base",
     "input": "欢迎使用点点语音合成系统。",
     "ref_audio": "docs/_static/audio/ref_voice.wav",
-    "ref_text": "今天天气很好，我们一起去公园散步吧。",
+    "ref_text": "It was the night before my birthday. Hooray! It’s almost here! It may not be a holiday, but it’s the best day of the year.",
     "seed": 42,
     "stage_params": {"talker": {"n_timesteps": 10, "inference_cfg": 2.0, "max_patches": 200}}
   }' \
@@ -233,7 +235,7 @@ Speaker-only `extra_params` (validated at the serving layer):
 | `dual_stream` | bool | `false` | Dual-stream decode form (2:1 text/latent interleave); 400 on non-speaker checkpoints |
 | `style` | string | `null` | Style prefix for the dual-stream prompt; applies to the dual-stream form only |
 
-AcousticEdit composition knobs under `stage_params.preprocessing` (or `tts_params`): `acoustic_attribute` (`Speed` / `Pitch` / `Volume`) and `acoustic_value` (float). An explicit `instructions` string overrides composition entirely.
+AcousticEdit composition knobs under `stage_params.preprocessing`: `acoustic_attribute` (`Speed` / `Pitch` / `Volume`) and `acoustic_value` (float). An explicit `instructions` string overrides composition entirely.
 
 ### Flow Execution Modes
 
