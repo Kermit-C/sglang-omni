@@ -379,3 +379,32 @@ def test_weight_update_guard_blocks_all_three(tmp_path, monkeypatch):
         ok, message = method()
         assert ok is False
         assert "weight sharing" in message
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "update_weights_from_disk",
+        "update_weights_from_tensor",
+        "update_weights_from_distributed",
+    ],
+)
+@pytest.mark.parametrize("blocked", [False, True])
+def test_model_update_policy_runs_before_the_updater(
+    method_name: str, blocked: bool
+) -> None:
+    runner = _bare_runner()
+    runner.model = SmallModel(fill=1.0)
+    reason = "Cached execution is immutable; restart the worker"
+    if blocked:
+        runner.model.weight_update_blocked_reason = reason
+    updater = mock.Mock(return_value=(True, "updated"))
+    runner.weight_updater = SimpleNamespace(**{method_name: updater})
+    result = getattr(runner, method_name)("replacement", load_format="direct")
+    if blocked:
+        assert result == (False, reason)
+        updater.assert_not_called()
+    else:
+        assert result == (True, "updated")
+        updater.assert_called_once_with("replacement", load_format="direct")
+    assert torch.all(runner.model.linear.weight == 1.0)

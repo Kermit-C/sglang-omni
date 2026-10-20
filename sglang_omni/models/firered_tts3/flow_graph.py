@@ -29,11 +29,23 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 from collections import OrderedDict
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
+
+from sglang_omni.models.firered_tts3.compiled_dit import (
+    CompiledDiTExecutor,
+    TimeCacheUnavailable,
+    TimeConditionCache,
+    TimeGemmMode,
+    TimeGemmTable,
+    finite_byte_equal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +72,17 @@ def flow_dit_dtype(mode: str) -> torch.dtype:
     return torch.bfloat16 if mode.endswith("bf16") else torch.float32
 
 
+def flow_optimizations(mode: FlowMode) -> bool:
+    default = "1" if mode.startswith("compile") else "0"
+    time_cache = os.environ.get("FIRERED_TTS3_PRECOMPUTE_TIME", default)
+    if time_cache not in ("0", "1"):
+        raise ValueError("FIRERED_TTS3_PRECOMPUTE_TIME must be 0 or 1")
+    return time_cache == "1"
+
+
 def prepare_flow_dit(
     dit: torch.nn.Module, mode: FlowMode
-) -> tuple[torch.nn.Module, torch.nn.Module]:
+) -> tuple[torch.nn.Module | CompiledDiTExecutor, torch.nn.Module]:
     """Build the mode's DiT execution stack; returns (run, fallback).
 
     run is what the flow loop calls; fallback is the same stack without the
@@ -78,11 +98,16 @@ def prepare_flow_dit(
     """
     if mode not in FLOW_MODES:
         raise ValueError(f"unknown flow mode {mode!r}; expected one of {FLOW_MODES}")
+    time_cache = flow_optimizations(mode)
+    if time_cache and not mode.startswith("compile"):
+        raise ValueError("Flow time caches require a compile flow mode")
     if mode == "fp32":
         return dit, dit
     if mode.endswith("bf16"):
         dit = copy.deepcopy(dit).to(dtype=torch.bfloat16)
     if mode.startswith("compile"):
+        if time_cache:
+            return CompiledDiTExecutor(dit), dit
         return (
             torch.compile(dit, dynamic=False, options={"epilogue_fusion": False}),
             dit,
@@ -97,7 +122,7 @@ def flow_t_span(n_timesteps: int, device: torch.device) -> torch.Tensor:
 
 
 def euler_flow_loop(
-    dit: torch.nn.Module,
+    dit: torch.nn.Module | CompiledDiTExecutor,
     xt: torch.Tensor,
     cond: torch.Tensor,
     t_span: torch.Tensor,
@@ -106,6 +131,9 @@ def euler_flow_loop(
     patch_size: int,
     *,
     dit_dtype: torch.dtype = torch.float32,
+    executor: CompiledDiTExecutor | None = None,
+    dispatch_modes: tuple[TorchDispatchMode, ...] = (),
+    time_mode: TimeGemmMode | None = None,
 ) -> torch.Tensor:
     """The Euler flow integration over xt (in place; returns the patch tail).
 
@@ -125,10 +153,14 @@ def euler_flow_loop(
         x_in_cfg = torch.cat([xt, cond * 0], dim=2)
         x_in = torch.cat([x_in, x_in_cfg], dim=0)
         t_in = torch.cat([t_in, t_in], dim=0)
-        if dit_dtype is torch.float32:
-            vt = dit(x=x_in, t=t_in)
-        else:
-            vt = dit(x=x_in.to(dit_dtype), t=t_in.to(dit_dtype)).float()
+        with (
+            executor.dispatch(dispatch_modes) if executor is not None else nullcontext()
+        ), (time_mode.step(ti) if time_mode is not None else nullcontext()):
+            run_dit = executor.run if executor is not None else dit
+            if dit_dtype is torch.float32:
+                vt = run_dit(x=x_in, t=t_in)
+            else:
+                vt = run_dit(x=x_in.to(dit_dtype), t=t_in.to(dit_dtype)).float()
         vt_cond, vt_uncond = vt.chunk(2, dim=0)
         vt = (1.0 + cfg) * vt_cond - cfg * vt_uncond
         xt[:, -patch_size:] = (
@@ -144,6 +176,28 @@ class FlowGraphEntry:
     xt: torch.Tensor  # [B, history+patch, redae_dim]
     cond: torch.Tensor  # [B, history+patch, cond_channels]
     cfg: torch.Tensor  # [B, 1, 1] fp32 per-row CFG scale
+    time_table: TimeGemmTable | None = None
+    dispatch_modes: tuple[TorchDispatchMode, ...] = ()
+    t_span: torch.Tensor | None = None
+    replay_streams: dict[tuple[int, int], torch.cuda.Stream] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def record_replay_stream(self, stream: torch.cuda.Stream) -> None:
+        """Register cached tensors once per replay stream; this does not serialize use."""
+        key = (stream.device.index, stream.cuda_stream)
+        if key in self.replay_streams:
+            return
+        for tensor in (self.xt, self.cond, self.cfg):
+            tensor.record_stream(stream)
+        if self.t_span is not None:
+            self.t_span.record_stream(stream)
+        if self.time_table is not None:
+            for step in self.time_table.steps:
+                for value in step.values():
+                    value.output.record_stream(stream)
+        # note (Codex): replay bypasses Python dispatch, so retain each registered stream.
+        self.replay_streams[key] = stream
 
 
 class FlowGraphRunner:
@@ -164,7 +218,7 @@ class FlowGraphRunner:
 
     def __init__(
         self,
-        dit: torch.nn.Module,
+        dit: torch.nn.Module | CompiledDiTExecutor,
         t_span: torch.Tensor,
         *,
         n_timesteps: int,
@@ -174,12 +228,30 @@ class FlowGraphRunner:
         capture_sizes: list[int] | tuple[int, ...] | None = None,
         mode: FlowMode = "fp32",
         dit_fallback: torch.nn.Module | None = None,
+        precompute_time_conditions: bool | None = None,
     ) -> None:
         self.mode = mode
         self.dit = dit
         self.dit_dtype = flow_dit_dtype(mode)
         self.dit_fallback = dit_fallback if dit_fallback is not None else dit
-        self.t_span = t_span
+        time_cache = flow_optimizations(mode)
+        self.precompute_time_conditions = (
+            time_cache
+            if precompute_time_conditions is None
+            else precompute_time_conditions
+        )
+        self.optimize = self.precompute_time_conditions
+        if self.optimize and not mode.startswith("compile"):
+            raise ValueError("Flow time caches require a compile flow mode")
+        if isinstance(dit, CompiledDiTExecutor):
+            self.executor = dit
+        elif self.optimize:
+            self.executor = CompiledDiTExecutor(self.dit_fallback, original=dit)
+            self.dit = self.executor
+        else:
+            self.executor = None
+        self.time_cache: TimeConditionCache | None = None
+        self.t_span = t_span.clone() if self.optimize else t_span
         self.n_timesteps = int(n_timesteps)
         self.patch_size = int(patch_size)
         self.history_length = int(history_length)
@@ -207,10 +279,17 @@ class FlowGraphRunner:
             "captures": 0,
             "eager": 0,
             "padded": 0,
+            "optimized_captures": 0,
+            "optimization_fallbacks": 0,
         }
 
     def stats(self) -> dict[str, object]:
-        return {**self.counters, "cache_size": len(self.cache)}
+        return {
+            **self.counters,
+            "cache_size": len(self.cache),
+            "precompute_time_conditions": self.precompute_time_conditions,
+            "optimization_enabled": self.optimize,
+        }
 
     def run(
         self,
@@ -273,6 +352,8 @@ class FlowGraphRunner:
         entry.xt[:, self.history_length :].copy_(x0)
         entry.cond.copy_(cond)
         entry.cfg.copy_(cfgs)
+        if entry.dispatch_modes:
+            entry.record_replay_stream(torch.cuda.current_stream(entry.xt.device))
         entry.graph.replay()
         # The tail aliases the static buffer the next replay overwrites.
         return entry.xt[:, -self.patch_size :][:bsz].clone()
@@ -295,51 +376,129 @@ class FlowGraphRunner:
         cond = cond.contiguous().clone()
         cfg = torch.zeros(xt.shape[0], 1, 1, device=xt.device, dtype=torch.float32)
 
-        def body() -> None:
-            euler_flow_loop(
+        executor = self.executor if self.dit is not self.dit_fallback else None
+        time_table = None
+        time_mode = None
+        modes: tuple[TorchDispatchMode, ...] = ()
+
+        def body(
+            state: torch.Tensor,
+            condition: torch.Tensor,
+            scales: torch.Tensor,
+            active_modes: tuple[TorchDispatchMode, ...],
+        ) -> torch.Tensor:
+            return euler_flow_loop(
                 self.dit,
-                xt,
-                cond,
+                state,
+                condition,
                 self.t_span,
-                cfg,
+                scales,
                 self.n_timesteps,
                 self.patch_size,
                 dit_dtype=self.dit_dtype,
+                executor=executor if active_modes else None,
+                dispatch_modes=active_modes,
+                time_mode=time_mode if active_modes else None,
             )
 
-        try:
-            with torch.inference_mode():
-                # Warm runs stay on the current stream, synchronized: cuDNN /
-                # cuBLAS autotuning and lazy inits must happen outside the
-                # capture, and side-stream warmup perturbs the cuBLAS
-                # workspace enough to shift later numerics run-to-run.
-                for _ in range(WARMUP_ITERATIONS):
-                    body()
-                torch.cuda.synchronize()
-                graph = torch.cuda.CUDAGraph()
-                if self.capture_stream is None:
-                    self.capture_stream = torch.cuda.Stream(device=xt.device)
-                # thread_local: colocated stages may keep using CUDA on other
-                # threads while this capture records.
-                with torch.cuda.graph(
-                    graph,
-                    pool=self.graph_pool,
-                    stream=self.capture_stream,
-                    capture_error_mode="thread_local",
-                ):
-                    body()
-        except Exception:
-            logger.warning(
-                f"FireRedTTS3 flow CUDA graph capture failed for xt={tuple(xt.shape)} "
-                f"cond={tuple(cond.shape)}; disabling flow graphs",
-                exc_info=True,
-            )
-            return None
+        def capture_graph(
+            active_modes: tuple[TorchDispatchMode, ...]
+        ) -> torch.cuda.CUDAGraph:
+            for _ in range(WARMUP_ITERATIONS):
+                body(xt, cond, cfg, active_modes)
+            torch.cuda.synchronize()
+            graph = torch.cuda.CUDAGraph()
+            if self.capture_stream is None:
+                self.capture_stream = torch.cuda.Stream(device=xt.device)
+            with torch.cuda.graph(
+                graph,
+                pool=self.graph_pool,
+                stream=self.capture_stream,
+                capture_error_mode="thread_local",
+            ):
+                body(xt, cond, cfg, active_modes)
+            return graph
+
+        with torch.inference_mode():
+            if self.optimize and executor is not None:
+                try:
+                    if self.precompute_time_conditions:
+                        if self.time_cache is None:
+                            self.time_cache = TimeConditionCache(executor.source)
+                        x_in = torch.cat([xt, cond], dim=2)
+                        x_uncond = torch.cat([xt, cond * 0], dim=2)
+                        example = torch.cat([x_in, x_uncond], dim=0).to(self.dit_dtype)
+                        time_table = self.time_cache.prepare(
+                            executor, example, self.t_span, self.n_timesteps
+                        )
+                        time_mode = self.time_cache.mode(time_table)
+                        modes += (time_mode,)
+                    generator = torch.Generator(device=xt.device).manual_seed(41729)
+                    for probe in range(3):
+                        if probe == 0:
+                            probe_xt = torch.zeros_like(xt)
+                            probe_cond = torch.zeros_like(cond)
+                            probe_cfg = cfg
+                        else:
+                            probe_xt = torch.randn(
+                                xt.shape,
+                                device=xt.device,
+                                dtype=xt.dtype,
+                                generator=generator,
+                            )
+                            probe_cond = torch.randn(
+                                cond.shape,
+                                device=cond.device,
+                                dtype=cond.dtype,
+                                generator=generator,
+                            )
+                            probe_cfg = torch.full_like(cfg, 1.2 if probe == 1 else 2.0)
+                        expected = body(probe_xt.clone(), probe_cond, probe_cfg, ())
+                        actual = body(probe_xt.clone(), probe_cond, probe_cfg, modes)
+                        if not finite_byte_equal(actual, expected):
+                            raise TimeCacheUnavailable(
+                                f"Complete Flow exact gate failed for probe {probe}"
+                            )
+                    graph = capture_graph(modes)
+                    self.counters["optimized_captures"] += 1
+                except Exception:
+                    logger.warning(
+                        f"Flow optimization rejected for bucket={xt.shape[0]}; "
+                        "retrying the original compiled DiT",
+                        exc_info=True,
+                    )
+                    self.counters["optimization_fallbacks"] += 1
+                    modes, time_table = (), None
+                    try:
+                        graph = capture_graph(())
+                    except Exception:
+                        logger.warning(
+                            "Original compiled Flow capture failed", exc_info=True
+                        )
+                        return None
+            else:
+                try:
+                    graph = capture_graph(())
+                except Exception:
+                    logger.warning(
+                        f"FireRedTTS3 flow CUDA graph capture failed for xt={tuple(xt.shape)} "
+                        f"cond={tuple(cond.shape)}",
+                        exc_info=True,
+                    )
+                    return None
         logger.info(
-            f"Captured FireRedTTS3 flow CUDA graph: xt={tuple(xt.shape)} "
-            f"cond={tuple(cond.shape)} ({self.n_timesteps} Euler steps)"
+            f"Captured FireRedTTS3 flow: xt={tuple(xt.shape)} cond={tuple(cond.shape)} "
+            f"steps={self.n_timesteps} optimized={bool(modes)}"
         )
-        return FlowGraphEntry(graph=graph, xt=xt, cond=cond, cfg=cfg)
+        return FlowGraphEntry(
+            graph=graph,
+            xt=xt,
+            cond=cond,
+            cfg=cfg,
+            time_table=time_table,
+            dispatch_modes=modes,
+            t_span=self.t_span,
+        )
 
 
 __all__ = [

@@ -18,6 +18,9 @@ import torch
 from safetensors import safe_open
 from transformers import Qwen3Config, Qwen3Model
 
+import sglang_omni.models.firered_tts3.engine_builder as engine_builder_module
+from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
+from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 from sglang_omni.models.firered_tts3.weights import (
     build_dit,
     build_patch_encoder,
@@ -37,6 +40,79 @@ REDAE_ENCODER_SKIP_KEYS = {
     "downsample.qwen3.embed_tokens.weight",
 }
 REDAE_DECODER_SKIP_KEYS = {"qwen3.embed_tokens.weight"}
+
+
+@pytest.fixture
+def loadable_model() -> FireRedTTS3SGLangModel:
+    class Backbone(torch.nn.Linear):
+        def load_weights(self, weights: list[tuple[str, torch.Tensor]]) -> None:
+            with torch.no_grad():
+                for name, tensor in weights:
+                    self.get_parameter(name).copy_(tensor)
+
+    model = FireRedTTS3SGLangModel.__new__(FireRedTTS3SGLangModel)
+    torch.nn.Module.__init__(model)
+    model.backbone = Backbone(2, 2, bias=False)
+    for name in ("patch_encoder", "dit", "dit_head", "stop_head"):
+        setattr(model, name, torch.nn.Linear(2, 2, bias=False))
+    model.spk_proj_llm = model.spk_proj_dit = None
+    return model
+
+
+def test_weight_loading_finishes_before_execution_is_locked(
+    loadable_model: FireRedTTS3SGLangModel,
+) -> None:
+    model = loadable_model
+    assert model.weight_update_blocked_reason is None
+    initial = torch.ones_like(model.dit.weight)
+    assert model.load_weights([("dit.weight", initial)]) == {"dit.weight"}
+    assert torch.equal(model.dit.weight, initial)
+    model.weights_locked = True
+    updates = iter([("dit.weight", torch.zeros_like(initial))])
+    with pytest.raises(RuntimeError, match="restart the worker"):
+        model.load_weights(updates)
+    assert next(updates)[0] == "dit.weight"
+    assert torch.equal(model.dit.weight, initial)
+
+
+@pytest.mark.parametrize("compile_fails", [False, True])
+def test_compile_locks_updates_before_creating_execution(
+    loadable_model: FireRedTTS3SGLangModel,
+    monkeypatch: pytest.MonkeyPatch,
+    compile_fails: bool,
+) -> None:
+    model = loadable_model
+    builder = FireRedTTS3EngineBuilder(flow_cuda_graph=True)
+
+    def prepare(
+        dit: torch.nn.Module, mode: str
+    ) -> tuple[torch.nn.Module, torch.nn.Module]:
+        assert dit is model.dit and mode == builder.flow_mode
+        with pytest.raises(RuntimeError, match="restart the worker"):
+            model.load_weights([])
+        if compile_fails:
+            raise RuntimeError("compile failed")
+        else:
+            return dit, dit
+
+    monkeypatch.setattr(engine_builder_module, "prepare_flow_dit", prepare)
+    if compile_fails:
+        with pytest.raises(RuntimeError, match="compile failed"):
+            builder.compile_model(model, None)
+    else:
+        builder.compile_model(model, None)
+    assert model.weight_update_blocked_reason is not None
+
+
+def test_disabled_flow_graph_does_not_lock_weight_loading(
+    loadable_model: FireRedTTS3SGLangModel,
+) -> None:
+    builder = FireRedTTS3EngineBuilder(flow_cuda_graph=False)
+    builder.compile_model(loadable_model, None)
+    assert loadable_model.weight_update_blocked_reason is None
+    replacement = torch.zeros_like(loadable_model.dit.weight)
+    loadable_model.load_weights([("dit.weight", replacement)])
+    assert torch.equal(loadable_model.dit.weight, replacement)
 
 
 def checkpoint_keys(path: Path, subfolder: str = "") -> list[str]:

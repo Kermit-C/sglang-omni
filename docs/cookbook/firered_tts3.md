@@ -250,6 +250,20 @@ Only the DiT matmul body lowers to bf16: the Euler state, noise, CFG blend, and 
 
 Compile cost is per process and per batch bucket: the first request(s) that hit a new concurrency shape pay a one-time ~45-85 s torch.compile (~45 s with a warm inductor FX cache, which persists across restarts). Startup warmup pre-compiles the single-request shapes.
 
+### Compiled Flow Time Cache
+
+The time cache is enabled by default for `flow_mode: compile_fp32` and `compile_bf16` when Flow CUDA graphs are used (`stages.talker.factory.flow_cuda_graph: true`). It caches the original compiled time-branch matrix-multiply outputs for each Euler step and batch bucket. Eager `fp32` / `bf16` modes leave it disabled by default; explicitly setting `FIRERED_TTS3_PRECOMPUTE_TIME=1` with an eager mode is rejected.
+
+To disable the cache before starting the worker:
+
+```bash
+export FIRERED_TTS3_PRECOMPUTE_TIME=0
+```
+
+The original DiT graph and its compilation options are retained. Before capture, each bucket must pass finite, same-dtype, byte-for-byte checks against the original compiled Flow, including deterministic nonzero probes. A schema mismatch or failed precision check logs a warning and retries the whole Flow with the original compiled path. Failure of that original path invokes the existing fallback behavior. This gate compares the same batch bucket and dtype; it does not assert equality across different batching schedules or precisions.
+
+Load weights and finish dtype/device placement before constructing the Flow executor and its caches. The worker rejects weight-update requests after Flow execution is initialized; restart the worker to load different weights. Direct mutation of model parameters or modules is unsupported. Capture-time weight checks catch supported mismatches, but graph replay does not scan weights and these checks do not provide hot-update support. Each graph entry owns the time table built for its model, dtype/device, CFG batch shape, and time schedule; graph eviction releases the table when its last owner is gone.
+
 ### Performance
 
 Base voice cloning, one fixed Chinese request (~4.8 s audio), 1x L20, streaming path, warm service at the final commit. The vLLM column is the reference port's final tuned stack on 1x H20 (a longer ~7.8 s utterance); L20 and H20 measure within a few percent of each other on this stack's other TTS models.

@@ -68,6 +68,7 @@ def backbone_qwen3_config(config: FireRedTTS3Config) -> Qwen3Config:
 class FireRedTTS3SGLangModel(nn.Module):
     """Compose the SGLang Qwen3 backbone with the FireRedTTS3 side path."""
 
+    weights_locked: bool = False
     # note: class-level default so partially-constructed instances (tests
     # building via __new__) resolve the graph-feedback probe to disabled.
     graph_feedback_buffer_value: torch.Tensor | None = None
@@ -186,7 +187,20 @@ class FireRedTTS3SGLangModel(nn.Module):
         if device.type == "cuda":
             torch.cuda.synchronize(device)
 
+    @property
+    def weight_update_blocked_reason(self) -> str | None:
+        if self.weights_locked:
+            return (
+                "FireRedTTS3 weight updates are disabled after Flow execution is "
+                "initialized; restart the worker with new weights"
+            )
+        else:
+            return None
+
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        reason = self.weight_update_blocked_reason
+        if reason is not None:
+            raise RuntimeError(reason)
         backbone_weights: list[tuple[str, torch.Tensor]] = []
         side_params = dict(self.side_path_parameters())
         loaded: set[str] = set()

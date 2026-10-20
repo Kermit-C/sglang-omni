@@ -206,8 +206,6 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         compile warm-up and no served request pays the compile tax.
         """
         del server_args
-        if self.flow_mode == "fp32":
-            return
         if not self.flow_cuda_graph:
             logger.info(
                 f"FireRedTTS3 flow_mode={self.flow_mode} ignored: the flow "
@@ -215,6 +213,7 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
             )
             return
         started = time.perf_counter()
+        model.weights_locked = True
         self._flow_dit_stack = prepare_flow_dit(model.dit, self.flow_mode)
         logger.info(
             f"FireRedTTS3 flow mode {self.flow_mode}: DiT stack prepared in "

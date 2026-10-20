@@ -525,9 +525,10 @@ class SGLModelRunner(ModelRunner):
         return None
 
     def weight_update_blocked_reason(self) -> str | None:
+        """Honor the model's optional str-or-None weight_update_blocked_reason."""
         ws = self._weight_share_config
         if ws is None:
-            return None
+            return getattr(self.model, "weight_update_blocked_reason", None)
         return (
             f"weight updates are disabled while same-GPU weight sharing is "
             f"active (role={ws.role}): replicas alias the leader's storage, "

@@ -19,6 +19,8 @@ test (the compile tree must tolerate the outer flow graph capture).
 from __future__ import annotations
 
 import collections
+import gc
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +28,16 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+import sglang_omni.models.firered_tts3.flow_graph as flow_graph_module
+from sglang_omni.models.firered_tts3.compiled_dit import (
+    DIT_RECOMPILE_LIMIT,
+    CompiledDiTExecutor,
+    TimeCacheUnavailable,
+    TimeConditionCache,
+    TimeGemmMode,
+    TimeGemmTable,
+    finite_byte_equal,
+)
 from sglang_omni.models.firered_tts3.dit import DiT
 from sglang_omni.models.firered_tts3.flow_graph import (
     FLOW_MODES,
@@ -542,4 +554,467 @@ def test_compile_fp32_graph_captures_and_runs(tiny_dit, device) -> None:
     torch.testing.assert_close(got, want, rtol=1e-2, atol=1e-4)
 
 
+@pytest.fixture(autouse=True)
+def disable_flow_optimization_environment(monkeypatch) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+
+
+@pytest.mark.parametrize("inherited_limit", [2, 96])
+@pytest.mark.parametrize("should_raise", [False, True])
+def test_explicit_time_cache_protects_original_compiled_call(
+    monkeypatch: pytest.MonkeyPatch, inherited_limit: int, should_raise: bool
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
+    config = torch._dynamo.config
+    observed: list[tuple[int, bool, bool]] = []
+
+    def config_state() -> tuple[int, bool, bool]:
+        return (
+            config.recompile_limit,
+            config.fail_on_recompile_limit_hit,
+            config.suppress_errors,
+        )
+
+    class CompiledProbe(torch.nn.Module):
+        def forward(self, *, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            observed.append(config_state())
+            if should_raise:
+                raise RuntimeError("compiled probe failure")
+            else:
+                return x + t
+
+    runner = FlowGraphRunner(
+        CompiledProbe(),
+        torch.tensor([0.0, 1.0]),
+        n_timesteps=1,
+        patch_size=1,
+        history_length=0,
+        mode="compile_fp32",
+        dit_fallback=torch.nn.Identity(),
+        precompute_time_conditions=True,
+    )
+    x = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    t = torch.ones_like(x)
+    initial = config_state()
+    with config.patch(
+        recompile_limit=inherited_limit,
+        fail_on_recompile_limit_hit=False,
+        suppress_errors=True,
+    ):
+        if should_raise:
+            with pytest.raises(RuntimeError, match="compiled probe failure"):
+                runner.dit(x=x, t=t)
+        else:
+            assert torch.equal(runner.dit(x=x, t=t), x + t)
+        assert observed == [(max(DIT_RECOMPILE_LIMIT, inherited_limit), True, False)]
+        assert config_state() == (inherited_limit, False, True)
+    assert config_state() == initial
+
+
+@pytest.fixture
+def flow_dispatch_dit(tiny_dit: DiT) -> DiT:
+    # note (Codex): a zero head isolates dispatch lifecycle from backend rounding.
+    with torch.no_grad():
+        tiny_dit.final_layer.linear.weight.zero_()
+        tiny_dit.final_layer.linear.bias.zero_()
+    return tiny_dit
+
+
+def test_optimized_prepare_preserves_original_weights(monkeypatch) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    source = tiny_cpu_dit()
+    original = {
+        name: parameter.detach().clone()
+        for name, parameter in source.named_parameters()
+    }
+    execution, fallback = prepare_flow_dit(source, "compile_bf16")
+    assert isinstance(execution, CompiledDiTExecutor)
+    assert execution.source is fallback and fallback is not source
+    assert all(parameter.dtype == torch.bfloat16 for parameter in fallback.parameters())
+    for name, parameter in source.named_parameters():
+        assert parameter.dtype == torch.float32
+        assert torch.equal(parameter, original[name])
+
+
+@pytest.mark.parametrize("mode", ["fp32", "bf16"])
+def test_flow_caches_require_compiled_execution(monkeypatch, mode: str) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    with pytest.raises(ValueError, match="require a compile flow mode"):
+        prepare_flow_dit(tiny_cpu_dit(), mode)
+
+
+def test_invalid_flow_cache_switches_fail(monkeypatch) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "2")
+    with pytest.raises(ValueError, match="FIRERED_TTS3_PRECOMPUTE_TIME"):
+        prepare_flow_dit(tiny_cpu_dit(), "compile_bf16")
+
+
+@pytest.mark.accelerator
+def test_failed_optimization_gate_keeps_original_compiled_graph(
+    flow_dispatch_dit, device, monkeypatch, caplog
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
+    assert isinstance(execution, CompiledDiTExecutor)
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(1,),
+    )
+    original_loop = flow_graph_module.euler_flow_loop
+    optimized_calls = 0
+
+    def perturb_cached_flow(*args, **kwargs) -> torch.Tensor:
+        nonlocal optimized_calls
+        patch = original_loop(*args, **kwargs)
+        if kwargs.get("dispatch_modes"):
+            optimized_calls += 1
+            return patch + 1
+        else:
+            return patch
+
+    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", perturb_cached_flow)
+    generator = torch.Generator(device=device).manual_seed(71)
+    hist, noise, cond = make_inputs(device, generator, 1)
+    cfg = torch.full((1, 1, 1), 1.2, device=device)
+    with torch.inference_mode():
+        got = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+        calls_after_capture = optimized_calls
+        repeated = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+        expected = original_loop(
+            execution.original,
+            torch.cat([hist, noise], dim=1),
+            cond,
+            runner.t_span,
+            cfg,
+            N_TIMESTEPS,
+            PATCH_SIZE,
+            dit_dtype=torch.bfloat16,
+        )
+    assert calls_after_capture > 0 and optimized_calls == calls_after_capture
+    assert "Complete Flow exact gate failed" in caplog.text
+    assert got is not None and torch.equal(got, expected)
+    assert torch.equal(got, repeated)
+    assert runner.enabled and runner.dit is execution and runner.dit is not fallback
+    assert runner.stats()["optimized_captures"] == 0
+    assert runner.stats()["optimization_fallbacks"] == 1
+    assert runner.stats()["captures"] == 1 and runner.stats()["eager"] == 0
+    entry = next(iter(runner.cache.values()))
+    assert entry.dispatch_modes == () and entry.time_table is None
+
+
+@pytest.mark.accelerator
+def test_optimized_flow_hits_dispatch_and_retains_time_table(
+    flow_dispatch_dit, device, monkeypatch
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    cached_time_hits = collections.Counter()
+    original_dispatch = TimeGemmMode.__torch_dispatch__
+
+    def count_cached_time_hits(self, func, types, args=(), kwargs=None) -> object:
+        if (
+            self.phase == "cached"
+            and func is torch.ops.aten.addmm.out
+            and args[2].data_ptr() in self.weights
+        ):
+            cached_time_hits[id(self)] += 1
+        return original_dispatch(self, func, types, args, kwargs)
+
+    monkeypatch.setattr(TimeGemmMode, "__torch_dispatch__", count_cached_time_hits)
+    execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
+    assert isinstance(execution, CompiledDiTExecutor)
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(1,),
+    )
+    generator = torch.Generator(device=device).manual_seed(73)
+    hist, noise, cond = make_inputs(device, generator, 1)
+    cfg = torch.full((1, 1, 1), 2.0, device=device)
+    with torch.inference_mode():
+        got = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+        expected = euler_flow_loop(
+            execution.original,
+            torch.cat([hist, noise], dim=1),
+            cond,
+            runner.t_span,
+            cfg,
+            N_TIMESTEPS,
+            PATCH_SIZE,
+            dit_dtype=torch.bfloat16,
+        )
+    assert got is not None and torch.equal(got, expected)
+    assert runner.dit is execution and runner.enabled
+    assert runner.stats()["optimized_captures"] == 1
+    assert runner.stats()["optimization_fallbacks"] == 0
+    assert runner.stats()["eager"] == 0
+    entry = next(iter(runner.cache.values()))
+    assert len(entry.dispatch_modes) == 1
+    time_mode = entry.dispatch_modes[0]
+    assert isinstance(time_mode, TimeGemmMode)
+    assert time_mode.table is entry.time_table and entry.time_table is not None
+    assert len(entry.time_table.steps) == N_TIMESTEPS
+    assert cached_time_hits[id(time_mode)] > 0
+    table_ref = weakref.ref(entry.time_table)
+    value_ref = weakref.ref(next(iter(entry.time_table.steps[0].values())).output)
+    del time_mode
+    gc.collect()
+    assert table_ref() is entry.time_table and value_ref() is not None
+    def reject_time_weight_scan(self: TimeConditionCache) -> None:
+        raise AssertionError("Time weights must not be scanned during replay")
+
+    monkeypatch.setattr(TimeConditionCache, "validate_weights", reject_time_weight_scan)
+    hits_before_replay = dict(cached_time_hits)
+    with torch.inference_mode():
+        repeated = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+    assert torch.equal(got, repeated)
+    assert dict(cached_time_hits) == hits_before_replay
+    assert runner.stats()["captures"] == 1 and runner.stats()["hits"] == 1
+    torch.cuda.synchronize(device)
+    runner.cache.clear()
+    del entry
+    gc.collect()
+    assert table_ref() is None and value_ref() is None
+
+
+def test_time_exact_gate_requires_finite_identical_bytes() -> None:
+    reference = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    assert finite_byte_equal(reference, reference.clone())
+    assert finite_byte_equal(reference, reference.t().contiguous().t())
+    for value in (float("nan"), float("inf"), -float("inf")):
+        invalid = torch.tensor([value])
+        assert not finite_byte_equal(invalid, invalid.clone())
+    assert not finite_byte_equal(torch.tensor([0.0]), torch.tensor([-0.0]))
+    assert not finite_byte_equal(reference, reference.double())
+    assert not finite_byte_equal(reference, reference.flatten())
+    changed = torch.nextafter(reference, torch.full_like(reference, float("inf")))
+    assert not finite_byte_equal(reference, changed)
+
+
+@pytest.mark.parametrize(
+    "failure,message",
+    [
+        ("negative", "Invalid or nested"),
+        ("past_end", "Invalid or nested"),
+        ("nested", "Invalid or nested"),
+        ("missing", "missed compiled addmm"),
+        ("unscoped", "Unscoped or repeated"),
+        ("repeated", "Unscoped or repeated"),
+    ],
+)
+def test_time_gemm_rejects_invalid_step_and_missing_operations(
+    failure: str, message: str
+) -> None:
+    inputs, weight, bias = torch.ones(2, 3), torch.ones(3, 4), torch.ones(4)
+    output = torch.empty(2, 4)
+    mode = TimeGemmMode({weight.data_ptr(): "time"}, phase="collect", n_timesteps=2)
+    with pytest.raises(TimeCacheUnavailable, match=message):
+        if failure in ("negative", "past_end"):
+            with mode.step(-1 if failure == "negative" else 2):
+                pass
+        elif failure == "nested":
+            with mode.step(0), mode.step(1):
+                pass
+        elif failure == "missing":
+            with mode.step(0):
+                pass
+        elif failure == "unscoped":
+            with mode:
+                torch.addmm(bias, inputs, weight, out=output)
+        else:
+            with mode, mode.step(0):
+                torch.addmm(bias, inputs, weight, out=output)
+                torch.addmm(bias, inputs, weight, out=output)
+    with mode, mode.step(1):
+        torch.addmm(bias, inputs, weight, out=output)
+    assert torch.equal(output, torch.full((2, 4), 4.0))
+
+
+def test_time_gemm_cache_copies_snapshot_and_rejects_wrong_signature() -> None:
+    inputs = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    weight = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    bias, output = torch.ones(4), torch.empty(2, 4)
+    weights = {weight.data_ptr(): "time"}
+    collector = TimeGemmMode(weights, phase="collect", n_timesteps=1)
+    with collector, collector.step(0):
+        torch.addmm(bias, inputs, weight, out=output)
+    expected = output.clone()
+    table = TimeGemmTable(
+        model_id=id(weight), n_timesteps=1, steps=(collector.collected[0],)
+    )
+    cached = TimeGemmMode(weights, phase="cached", n_timesteps=1, table=table)
+    output.fill_(-1)
+    with cached, cached.step(0):
+        returned = torch.addmm(bias, inputs, weight, out=output)
+    assert returned is output
+    assert finite_byte_equal(output, expected)
+    assert table.steps[0]["time"].output.data_ptr() != output.data_ptr()
+    changed_stride = inputs.t().contiguous().t()
+    with pytest.raises(TimeCacheUnavailable, match="signature changed"):
+        with cached, cached.step(0):
+            torch.addmm(bias, changed_stride, weight, out=output)
+    missing_table = TimeGemmTable(model_id=id(weight), n_timesteps=1, steps=({},))
+    missing = TimeGemmMode(weights, phase="cached", n_timesteps=1, table=missing_table)
+    with pytest.raises(TimeCacheUnavailable, match="signature changed"):
+        with missing, missing.step(0):
+            torch.addmm(bias, inputs, weight, out=output)
+
+
+@pytest.mark.parametrize("mutation", ["inplace", "replace", "stride", "bias"])
+def test_time_condition_cache_detects_weight_changes(mutation: str) -> None:
+    source = tiny_cpu_dit()
+    cache = TimeConditionCache(source)
+    cache.validate_weights()
+    assert cache.version_checks_available
+    layer = source.t_embedder.time_mlp[2]
+    with torch.no_grad():
+        if mutation == "inplace":
+            layer.weight.add_(1)
+        elif mutation == "replace":
+            layer.weight = torch.nn.Parameter(layer.weight.clone())
+        elif mutation == "stride":
+            layer.weight.transpose_(0, 1)
+        else:
+            layer.bias.add_(1)
+    with pytest.raises(TimeCacheUnavailable, match="Time parameter changed"):
+        cache.validate_weights()
+
+
+@pytest.mark.parametrize("mode", ["compile_fp32", "compile_bf16"])
+def test_compiled_time_cache_enabled_by_default(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
+    monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
+    execution, fallback = prepare_flow_dit(tiny_cpu_dit(), mode)
+    assert isinstance(execution, CompiledDiTExecutor)
+    runner = tiny_runner(
+        execution, torch.device("cpu"), mode=mode, dit_fallback=fallback
+    )
+    assert runner.precompute_time_conditions
+    assert runner.executor is execution
+
+
+@pytest.mark.parametrize("mode", ["fp32", "bf16"])
+def test_eager_time_cache_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
+    monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
+    execution, fallback = prepare_flow_dit(tiny_cpu_dit(), mode)
+    assert execution is fallback
+    runner = tiny_runner(
+        execution, torch.device("cpu"), mode=mode, dit_fallback=fallback
+    )
+    assert not runner.precompute_time_conditions
+    assert runner.executor is None
+
+
+@pytest.mark.parametrize("mode", ["compile_fp32", "compile_bf16"])
+def test_compiled_time_cache_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
+    execution, fallback = prepare_flow_dit(tiny_cpu_dit(), mode)
+    assert not isinstance(execution, CompiledDiTExecutor)
+    runner = tiny_runner(
+        execution, torch.device("cpu"), mode=mode, dit_fallback=fallback
+    )
+    assert not runner.precompute_time_conditions
+    assert runner.executor is None
+
+
 __all__ = []
+
+
+@pytest.mark.parametrize("with_time", [True, False])
+def test_flow_entry_records_external_resources_once_per_replay_stream(
+    with_time: bool,
+) -> None:
+    class RecordingTensor:
+        def __init__(self) -> None:
+            self.streams: list[object] = []
+
+        def record_stream(self, stream) -> None:
+            self.streams.append(stream)
+
+    static = [RecordingTensor() for _ in range(3)]
+    span = RecordingTensor()
+    time_outputs = [RecordingTensor() for _ in range(2)] if with_time else []
+    table = (
+        SimpleNamespace(
+            steps=tuple(
+                {"gemm": SimpleNamespace(output=value)} for value in time_outputs
+            )
+        )
+        if with_time
+        else None
+    )
+    entry = flow_graph_module.FlowGraphEntry(
+        graph=object(),
+        xt=static[0],
+        cond=static[1],
+        cfg=static[2],
+        time_table=table,
+        t_span=span,
+    )
+    resources = static + [span] + time_outputs
+    first = SimpleNamespace(device=SimpleNamespace(index=0), cuda_stream=11)
+    same_native_stream = SimpleNamespace(
+        device=SimpleNamespace(index=0), cuda_stream=11
+    )
+    second = SimpleNamespace(device=SimpleNamespace(index=0), cuda_stream=22)
+    entry.record_replay_stream(first)
+    entry.record_replay_stream(same_native_stream)
+    assert all(tensor.streams == [first] for tensor in resources)
+    assert entry.replay_streams[(0, 11)] is first
+    entry.record_replay_stream(second)
+    entry.record_replay_stream(second)
+    assert all(tensor.streams == [first, second] for tensor in resources)
+    assert entry.replay_streams[(0, 22)] is second
+
+
+@pytest.mark.accelerator
+def test_time_tables_follow_graph_lru_eviction(flow_dispatch_dit, device, monkeypatch):
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(1,),
+        max_graphs=1,
+    )
+    generator = torch.Generator(device=device).manual_seed(97)
+    stream = torch.cuda.Stream(device=device)
+    table_refs = []
+    with torch.inference_mode():
+        for batch in (1, 2, 3):
+            hist, noise, cond = make_inputs(device, generator, batch)
+            actual = runner.run(
+                hist, noise, cond, torch.ones(batch, device=device), N_TIMESTEPS
+            )
+            assert actual is not None and torch.equal(actual, noise)
+            entry = next(iter(runner.cache.values()))
+            table_refs.append(weakref.ref(entry.time_table))
+            del entry
+            gc.collect()
+            assert table_refs[-1]() is not None
+            assert all(ref() is None for ref in table_refs[:-1])
+        stream.wait_stream(torch.cuda.current_stream(device))
+        with torch.cuda.stream(stream):
+            replayed = runner.run(
+                hist, noise, cond, torch.ones(batch, device=device), N_TIMESTEPS
+            )
+        runner.cache.clear()
+        gc.collect()
+        assert all(ref() is None for ref in table_refs)
+    stream.synchronize()
+    assert torch.equal(replayed, noise)
