@@ -49,6 +49,7 @@ from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
 from sglang_omni.models.firered_tts3.conv_plan import (
     INPUT_SHAPE as CONTROLLED_CONV_INPUT_SHAPE,
 )
+from sglang_omni.models.firered_tts3.ffngemm import QKV_CONFIGS, FfnGemmMode
 from sglang_omni.models.firered_tts3.flow_precision import FlowPrecisionGate
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,14 @@ def flow_optimizations(mode: FlowMode) -> tuple[bool, bool]:
     return time_cache == "1", conv_layout == "conv2d_channels_last"
 
 
+def flow_ffn_optimization(mode: FlowMode) -> bool:
+    value = os.environ.get("FIRERED_TTS3_FFN_GEMM", "1")
+    if value not in ("0", "1"):
+        raise ValueError("FIRERED_TTS3_FFN_GEMM must be 0 or 1")
+    else:
+        return value == "1" and mode == "compile_bf16"
+
+
 def prepare_flow_dit(
     dit: torch.nn.Module, mode: FlowMode
 ) -> tuple[torch.nn.Module | CompiledDiTExecutor, torch.nn.Module]:
@@ -112,6 +121,7 @@ def prepare_flow_dit(
     if mode not in FLOW_MODES:
         raise ValueError(f"unknown flow mode {mode!r}; expected one of {FLOW_MODES}")
     time_cache, conv_cache = flow_optimizations(mode)
+    ffn_gemm = flow_ffn_optimization(mode)
     if (time_cache or conv_cache) and not mode.startswith("compile"):
         raise ValueError("Flow time/convolution caches require a compile flow mode")
     if mode == "fp32":
@@ -119,7 +129,7 @@ def prepare_flow_dit(
     if mode.endswith("bf16"):
         dit = copy.deepcopy(dit).to(dtype=torch.bfloat16)
     if mode.startswith("compile"):
-        if time_cache or conv_cache:
+        if time_cache or conv_cache or ffn_gemm:
             return CompiledDiTExecutor(dit), dit
         return (
             torch.compile(dit, dynamic=False, options={"epilogue_fusion": False}),
@@ -167,8 +177,13 @@ def euler_flow_loop(
         x_in = torch.cat([x_in, x_in_cfg], dim=0)
         t_in = torch.cat([t_in, t_in], dim=0)
         with (
-            executor.dispatch(dispatch_modes) if executor is not None else nullcontext()
-        ), (time_mode.step(ti) if time_mode is not None else nullcontext()):
+            (
+                executor.dispatch(dispatch_modes)
+                if executor is not None
+                else nullcontext()
+            ),
+            time_mode.step(ti) if time_mode is not None else nullcontext(),
+        ):
             run_dit = executor.run if executor is not None else dit
             if dit_dtype is torch.float32:
                 vt = run_dit(x=x_in, t=t_in)
@@ -215,6 +230,8 @@ class FlowGraphEntry:
                     weight.packed.record_stream(stream)
                 if mode.controlled_plan is not None:
                     mode.controlled_plan.workspace.record_stream(stream)
+            elif isinstance(mode, FfnGemmMode):
+                mode.record_stream(stream)
         # note (Codex): replay bypasses Python dispatch, so retain each registered stream.
         self.replay_streams[key] = stream
 
@@ -260,7 +277,16 @@ class FlowGraphRunner:
             if precompute_time_conditions is None
             else precompute_time_conditions
         )
-        self.optimize = self.precompute_time_conditions or self.optimize_convolution
+        self.optimize_ffn = (
+            flow_ffn_optimization(mode)
+            and t_span.device.type == "cuda"
+            and torch.cuda.get_device_capability(t_span.device) == (12, 0)
+        )
+        self.optimize = (
+            self.precompute_time_conditions
+            or self.optimize_convolution
+            or self.optimize_ffn
+        )
         if self.optimize and not mode.startswith("compile"):
             raise ValueError("Flow time/convolution caches require a compile flow mode")
         if isinstance(dit, CompiledDiTExecutor):
@@ -272,6 +298,7 @@ class FlowGraphRunner:
             self.executor = None
         self.time_cache: TimeConditionCache | None = None
         self.conv_cache: Conv1dWeightCache | None = None
+        self.ffn_mode: FfnGemmMode | None = None
         self.t_span = t_span.clone() if self.optimize else t_span
         self.n_timesteps = int(n_timesteps)
         self.patch_size = int(patch_size)
@@ -302,6 +329,8 @@ class FlowGraphRunner:
             "padded": 0,
             "optimized_captures": 0,
             "optimization_fallbacks": 0,
+            "ffn_captures": 0,
+            "ffn_fallbacks": 0,
         }
 
     def stats(self) -> dict[str, object]:
@@ -310,6 +339,7 @@ class FlowGraphRunner:
             "cache_size": len(self.cache),
             "precompute_time_conditions": self.precompute_time_conditions,
             "optimize_convolution": self.optimize_convolution,
+            "optimize_ffn": self.optimize_ffn,
             "optimization_enabled": self.optimize,
         }
 
@@ -402,6 +432,7 @@ class FlowGraphRunner:
         time_table = None
         time_mode = None
         conv_mode = None
+        ffn_mode = None
         modes: tuple[TorchDispatchMode, ...] = ()
 
         def body(
@@ -415,6 +446,8 @@ class FlowGraphRunner:
             active_time = time_mode if time_mode in active_modes else None
             active_conv = conv_mode if conv_mode in active_modes else None
             conv_hits = active_conv.hits if active_conv is not None else 0
+            active_ffn = ffn_mode if ffn_mode in active_modes else None
+            ffn_hits = active_ffn.hits if active_ffn is not None else 0
             result = euler_flow_loop(
                 self.dit,
                 state,
@@ -434,6 +467,13 @@ class FlowGraphRunner:
                     raise TimeCacheUnavailable(
                         "Compiled convolution schema was not fully handled"
                     )
+            if active_ffn is not None:
+                expected = (
+                    active_ffn.expected_hits(2 * state.shape[0] * state.shape[1])
+                    * self.n_timesteps
+                )
+                if expected == 0 or active_ffn.hits - ffn_hits != expected:
+                    raise RuntimeError("Compiled DiT GEMM schema was not fully handled")
             return result
 
         probes: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
@@ -614,6 +654,88 @@ class FlowGraphRunner:
                             )
                             self.counters["optimization_fallbacks"] += 1
                             modes = time_modes
+                    if (
+                        self.optimize_ffn
+                        and conv_mode is not None
+                        and conv_mode in modes
+                        and xt.shape[0] in (1, 2, 4, 8, 16)
+                        and xt.shape[1] == 12
+                    ):
+                        base_modes = modes
+                        try:
+                            if self.ffn_mode is None:
+                                self.ffn_mode = FfnGemmMode(executor.source)
+                            ffn_mode = self.ffn_mode
+                            rows = 2 * xt.shape[0] * xt.shape[1]
+                            if (
+                                ffn_mode.enabled
+                                and rows in QKV_CONFIGS
+                                and ffn_mode.packed_compiled is None
+                            ):
+                                ffn_mode.prepare_packed(
+                                    executor.compile_backend, xt.device
+                                )
+                            if not ffn_mode.supports(rows):
+                                raise RuntimeError(ffn_mode.reason)
+                            ffn_mode.validate_weights()
+                            modes = (*base_modes, ffn_mode)
+                            for probe, (
+                                state,
+                                condition,
+                                scales,
+                                expected,
+                            ) in enumerate(probes):
+                                actual = body(
+                                    state.clone(),
+                                    condition,
+                                    scales,
+                                    modes,
+                                    observed=True,
+                                )
+                                if xt.shape[0] in (8, 16) and time_mode is not None:
+                                    uncached = body(
+                                        state.clone(),
+                                        condition,
+                                        scales,
+                                        tuple(
+                                            mode
+                                            for mode in modes
+                                            if mode is not time_mode
+                                        ),
+                                        observed=True,
+                                    )
+                                    check_precision(
+                                        "packed_time",
+                                        actual,
+                                        uncached,
+                                        strict_gate,
+                                        probe,
+                                    )
+                                check_precision(
+                                    "ffn",
+                                    actual,
+                                    expected,
+                                    self.precision_gate,
+                                    probe,
+                                )
+                            graph = capture_graph(modes, self.precision_gate)
+                            self.counters["ffn_captures"] += 1
+                        except Exception:
+                            logger.warning(
+                                f"FFN optimization rejected for bucket={xt.shape[0]}; "
+                                "retaining validated time/convolution optimizations",
+                                exc_info=True,
+                            )
+                            self.counters["ffn_fallbacks"] += 1
+                            modes = base_modes
+                            try:
+                                graph = capture_graph(modes, self.precision_gate)
+                            except Exception:
+                                logger.warning(
+                                    "Validated Flow baseline capture failed",
+                                    exc_info=True,
+                                )
+                                return None
                     if modes:
                         self.counters["optimized_captures"] += 1
             else:

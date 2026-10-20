@@ -122,6 +122,11 @@ class Attention(nn.Module):
         self.to_out.append(nn.Linear(self.inner_dim, dim))
         self.to_out.append(nn.Dropout(dropout))
 
+    def project_qkv(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.to_q(x), self.to_k(x), self.to_v(x)
+
     def forward(
         self,
         x: torch.Tensor,  # noised input x
@@ -130,9 +135,7 @@ class Attention(nn.Module):
     ) -> torch.Tensor:
         batch_size = x.shape[0]
 
-        query = self.to_q(x)
-        key = self.to_k(x)
-        value = self.to_v(x)
+        query, key, value = self.project_qkv(x)
 
         # attention
         inner_dim = key.shape[-1]

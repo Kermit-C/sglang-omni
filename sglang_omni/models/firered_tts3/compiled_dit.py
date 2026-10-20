@@ -15,6 +15,7 @@ from torch._ops import OpOverload
 from torch.utils._python_dispatch import TorchDispatchMode
 
 from sglang_omni.models.firered_tts3.dit import DiT
+from sglang_omni.models.firered_tts3.ffngemm import QKV_CONFIGS, FfnGemmMode
 
 # note (Codex): each bucket uses separate Dynamo entries for both backends.
 DIT_RECOMPILE_LIMIT = 64
@@ -83,6 +84,20 @@ class CompiledDiTExecutor:
             return self.original_compiled(x=x, t=t)
 
     def run(self, *, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        packed_mode = next(
+            (
+                mode
+                for mode in self.active_modes.get()
+                if isinstance(mode, FfnGemmMode)
+                and x.shape[0] * x.shape[1] in QKV_CONFIGS
+            ),
+            None,
+        )
+        if packed_mode is None:
+            observed = self.observed
+        else:
+            assert packed_mode.packed_compiled is not None
+            observed = packed_mode.packed_compiled
         with torch._dynamo.config.patch(
             recompile_limit=max(
                 DIT_RECOMPILE_LIMIT, torch._dynamo.config.recompile_limit
@@ -90,7 +105,7 @@ class CompiledDiTExecutor:
             fail_on_recompile_limit_hit=True,
             suppress_errors=False,
         ):
-            return self.observed(x=x, t=t)
+            return observed(x=x, t=t)
 
     def __call__(self, *, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.original(x=x, t=t)

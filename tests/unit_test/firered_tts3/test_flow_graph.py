@@ -27,7 +27,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn.functional as F
+from torch.utils._python_dispatch import TorchDispatchMode
 
+import sglang_omni.models.firered_tts3.compiled_dit as compiled_dit_module
 import sglang_omni.models.firered_tts3.flow_graph as flow_graph_module
 from sglang_omni.models.firered_tts3.compiled_dit import (
     DIT_RECOMPILE_LIMIT,
@@ -52,6 +54,7 @@ from sglang_omni.models.firered_tts3.model_runner import (
     FireRedTTS3ModelRunner,
     FlowState,
 )
+from sglang_omni.models.firered_tts3.packed_qkv import PackedQkvModel
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
 from sglang_omni.models.firered_tts3.weights import load_dit
@@ -559,6 +562,7 @@ def test_compile_fp32_graph_captures_and_runs(tiny_dit, device) -> None:
 
 @pytest.fixture(autouse=True)
 def disable_flow_optimization_environment(monkeypatch) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_FFN_GEMM", "0")
     monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "0")
     monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
@@ -869,6 +873,7 @@ def test_optimized_flow_hits_dispatch_and_retains_time_table(
             ).hits
             > 0
         )
+
     def reject_time_weight_scan(self: TimeConditionCache) -> None:
         raise AssertionError("Time weights must not be scanned during replay")
 
@@ -1112,6 +1117,7 @@ def test_time_condition_cache_detects_weight_changes(mutation: str) -> None:
 def test_compiled_flow_caches_enabled_by_default(
     monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
+    monkeypatch.delenv("FIRERED_TTS3_FFN_GEMM", raising=False)
     monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
     monkeypatch.delenv("FIREREDTTS3_CONV_LAYOUT", raising=False)
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
@@ -1128,6 +1134,7 @@ def test_compiled_flow_caches_enabled_by_default(
 def test_eager_flow_caches_disabled_by_default(
     monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
+    monkeypatch.delenv("FIRERED_TTS3_FFN_GEMM", raising=False)
     monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
     monkeypatch.delenv("FIREREDTTS3_CONV_LAYOUT", raising=False)
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
@@ -1690,3 +1697,400 @@ def test_time_tables_follow_graph_lru_eviction(flow_dispatch_dit, device, monkey
         assert all(ref() is None for ref in table_refs)
     stream.synchronize()
     assert torch.equal(replayed, noise)
+
+
+@pytest.mark.accelerator
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "wrong_result",
+        "capture_exception",
+        "unsupported_shape",
+        "bounded_result",
+        "cumulative_probe",
+        "cumulative_replay",
+    ],
+)
+def test_ffn_failure_retains_existing_time_and_conv_graph(
+    tiny_dit: DiT,
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    if torch.cuda.get_device_capability(device) != (12, 0):
+        pytest.skip("FFN capture optimization requires SM120")
+
+    # note (Codex): Diagonal power-of-two convolutions isolate FFN fallback from reduction noise.
+    with torch.no_grad():
+        for layer in tiny_dit.modules():
+            if isinstance(layer, torch.nn.Conv1d):
+                layer.weight.zero_()
+                layer.bias.zero_()
+                channels = torch.arange(layer.out_channels, device=device)
+                layer.weight[channels, channels, layer.kernel_size[0] // 2] = 0.5
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last")
+    cumulative = failure.startswith("cumulative_")
+    atol = "0.125" if cumulative else "1" if failure == "bounded_result" else "0"
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", atol)
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FFN_GEMM", "0")
+    execution, fallback = prepare_flow_dit(tiny_dit, "compile_bf16")
+    base = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(1,),
+    )
+    generator = torch.Generator(device=device).manual_seed(337)
+    inputs = [make_inputs(device, generator, 1) for _ in range(2)]
+    cfg = torch.full((1, 1, 1), 1.2, device=device)
+    injected = []
+
+    class FaultingFfn(TorchDispatchMode):
+        def __init__(self, source: torch.nn.Module) -> None:
+            super().__init__()
+            self.weights = {
+                layer.weight.data_ptr(): layer.weight
+                for name, layer in source.named_modules()
+                if isinstance(layer, torch.nn.Linear) and name.endswith(".mlp.ff.0.0")
+            }
+            assert self.weights
+            self.hits = 0
+            self.enabled = True
+            self.reason = ""
+            self.corrupted = 0
+            self.capture_failures = 0
+            injected.append(self)
+
+        def supports(self, rows: int) -> bool:
+            return rows in (24, 48, 96)
+
+        def expected_hits(self, rows: int) -> int:
+            return len(self.weights)
+
+        def validate_weights(self) -> None:
+            pass  # note (Codex): The injected failure preserves the original weights.
+
+        def record_stream(self, stream: torch.cuda.Stream) -> None:
+            for weight in self.weights.values():
+                weight.record_stream(stream)
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None) -> torch.Tensor:
+            kwargs = kwargs or {}
+            fields = dict(zip(("self", "mat1", "mat2"), args))
+            fields.update(kwargs)
+            weight = fields.get("mat2")
+            selected = (
+                func is torch.ops.aten.addmm.out
+                and isinstance(weight, torch.Tensor)
+                and weight.data_ptr() in self.weights
+            )
+            if (
+                selected
+                and failure == "capture_exception"
+                and torch.cuda.is_current_stream_capturing()
+            ):
+                self.capture_failures += 1
+                raise RuntimeError("injected FFN capture launch failure")
+            result = func(*args, **kwargs)
+            if selected:
+                self.hits += 1
+                if failure in ("wrong_result", "bounded_result"):
+                    # note (Codex): A real FFN error must reach the complete Flow gate.
+                    result[:, 0].add_(0.125 if failure == "bounded_result" else 16.0)
+                    self.corrupted += 1
+            return result
+
+    original_loop = flow_graph_module.euler_flow_loop
+
+    def perturb_complete_flow(*args, **kwargs) -> torch.Tensor:
+        patch = original_loop(*args, **kwargs)
+        modes = kwargs.get("dispatch_modes", ())
+        if cumulative:
+            if any(isinstance(mode, Conv1dWeightCache) for mode in modes):
+                patch.add_(3 / 32)
+            if any(isinstance(mode, FaultingFfn) for mode in modes) and (
+                failure == "cumulative_probe"
+                or torch.cuda.is_current_stream_capturing()
+            ):
+                # note (Codex): each 3/32 increment fits the 1/8 budget; their sum does not.
+                patch.add_(3 / 32)
+        return patch
+
+    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", perturb_complete_flow)
+    with torch.inference_mode():
+        expected = [base.run(*values, cfg, N_TIMESTEPS) for values in inputs]
+    assert all(value is not None for value in expected)
+    assert base.stats()["optimized_captures"] == 1
+    assert base.stats()["optimization_fallbacks"] == 0
+    base_entry = next(iter(base.cache.values()))
+    assert {type(mode).__name__ for mode in base_entry.dispatch_modes} == {
+        "TimeGemmMode",
+        "Conv1dWeightCache",
+    }
+
+    if failure != "unsupported_shape":
+        monkeypatch.setattr(flow_graph_module, "FfnGemmMode", FaultingFfn)
+    monkeypatch.delenv("FIRERED_TTS3_FFN_GEMM", raising=False)
+    candidate = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(1,),
+    )
+    with torch.inference_mode():
+        got = [candidate.run(*values, cfg, N_TIMESTEPS) for values in inputs]
+    assert all(value is not None for value in got)
+    if failure == "bounded_result":
+        assert any(
+            not finite_byte_equal(actual, reference)
+            for actual, reference in zip(got, expected)
+        )
+        assert all(
+            candidate.precision_gate.compare(actual, reference).accepted
+            for actual, reference in zip(got, expected)
+        )
+    else:
+        assert all(
+            finite_byte_equal(actual, reference)
+            for actual, reference in zip(got, expected)
+        )
+    assert candidate.enabled and candidate.dit is execution
+    stats = candidate.stats()
+    assert stats["ffn_captures"] == int(failure == "bounded_result")
+    assert stats["ffn_fallbacks"] == int(failure != "bounded_result")
+    assert stats["optimized_captures"] == 1 and stats["optimization_fallbacks"] == 0
+    assert stats["eager"] == 0 and stats["captures"] == 1 and stats["hits"] == 1
+    entry = next(iter(candidate.cache.values()))
+    expected_modes = {"TimeGemmMode", "Conv1dWeightCache"}
+    if failure == "bounded_result":
+        expected_modes.add("FaultingFfn")
+    assert {type(mode).__name__ for mode in entry.dispatch_modes} == expected_modes
+    assert entry.time_table is not None
+    assert ("FFN optimization rejected" in caplog.text) is (failure != "bounded_result")
+    if cumulative:
+        assert injected[0].hits > 0
+        stage = "ffn" if failure == "cumulative_probe" else "replay"
+        assert f"tolerance gate failed for {stage}" in caplog.text
+        reference = expected[0]
+        assert candidate.precision_gate.compare(reference + 3 / 32, reference).accepted
+        assert not candidate.precision_gate.compare(
+            reference + 3 / 16, reference
+        ).accepted
+    elif failure == "unsupported_shape":
+        assert candidate.ffn_mode is not None and not candidate.ffn_mode.enabled
+    elif failure in ("wrong_result", "bounded_result"):
+        assert injected[0].hits > 0 and injected[0].corrupted > 0
+    else:
+        assert injected[0].hits > 0 and injected[0].capture_failures == 1
+
+
+def test_unsupported_ffn_source_preserves_native_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import builtins
+
+    original_import = builtins.__import__
+
+    def without_optional_kernel(name, *args, **kwargs):
+        if (
+            name == "triton"
+            or name.startswith("triton.")
+            or name.endswith("ffn_gemm_kernel")
+        ):
+            raise AssertionError(
+                "Unsupported CPU source must not import the optional Triton kernel"
+            )
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_optional_kernel)
+    from sglang_omni.models.firered_tts3.ffngemm import FfnGemmMode
+
+    mode = FfnGemmMode(tiny_cpu_dit())
+    assert not mode.enabled and mode.reason and not mode.supports(24)
+    inputs, weight, bias = (
+        torch.arange(8.0).reshape(2, 4),
+        torch.ones(4, 3),
+        torch.ones(3),
+    )
+    expected, actual = torch.empty(2, 3), torch.empty(2, 3)
+    with torch.inference_mode():
+        torch.addmm(bias, inputs, weight, out=expected)
+        with mode:
+            torch.addmm(bias, inputs, weight, out=actual)
+    assert finite_byte_equal(actual, expected)
+    assert mode.hits == 0
+
+
+def test_packed_qkv_preserves_source_rng_and_forward() -> None:
+    source = tiny_cpu_dit()
+    x = torch.randn(2, HISTORY_LENGTH + PATCH_SIZE, REDAE_DIM + COND_CHANNELS)
+    t = torch.rand(2, 1, 1)
+    original = {
+        name: tensor.detach().clone() for name, tensor in source.state_dict().items()
+    }
+    with torch.no_grad():
+        expected = source(x=x, t=t)
+    rng = torch.random.get_rng_state().clone()
+    packed = PackedQkvModel(source)
+    assert torch.equal(torch.random.get_rng_state(), rng)
+    with torch.no_grad():
+        actual = packed.model(x=x, t=t)
+        unchanged = source(x=x, t=t)
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    assert finite_byte_equal(unchanged, expected)
+    assert source.state_dict().keys() == original.keys()
+    assert all(
+        finite_byte_equal(value, original[name])
+        for name, value in source.state_dict().items()
+    )
+    packed.validate_weights()
+
+
+@pytest.mark.accelerator
+@pytest.mark.parametrize(
+    "batch_size,scenario",
+    [
+        (8, "success"),
+        (16, "success"),
+        (8, "packed_time_corruption"),
+    ],
+)
+def test_large_packed_flow_routing_and_time_gate(
+    flow_dispatch_dit: DiT,
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    batch_size: int,
+    scenario: str,
+) -> None:
+    if torch.cuda.get_device_capability(device) != (12, 0):
+        pytest.skip("DiT GEMM capture optimization requires SM120")
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "1")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FFN_GEMM", "0")
+    execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
+    base = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(batch_size,),
+    )
+    generator = torch.Generator(device=device).manual_seed(113)
+    inputs = make_inputs(device, generator, batch_size)
+    cfg = torch.full((batch_size, 1, 1), 1.2, device=device)
+    with torch.inference_mode():
+        expected = base.run(*inputs, cfg, N_TIMESTEPS)
+    assert expected is not None
+    probes = []
+
+    class PackedProbe(TorchDispatchMode):
+        def __init__(self, source: torch.nn.Module) -> None:
+            super().__init__()
+            self.source = source
+            self.packed_qkv = None
+            self.packed_compiled = None
+            self.weights = set()
+            self.hits = 0
+            self.enabled = True
+            self.reason = ""
+            probes.append(self)
+
+        def prepare_packed(self, compile_backend, device: torch.device) -> None:
+            self.packed_qkv = PackedQkvModel(self.source)
+            self.packed_compiled = torch.compile(
+                self.packed_qkv.model, backend=compile_backend, dynamic=False
+            )
+            self.weights = {
+                layer.to_qkv.weight.data_ptr()
+                for layer in self.packed_qkv.layers.values()
+            }
+
+        def supports(self, rows: int) -> bool:
+            return rows in (192, 384)
+
+        def expected_hits(self, rows: int) -> int:
+            return len(self.weights)
+
+        def validate_weights(self) -> None:
+            self.packed_qkv.validate_weights()
+
+        def record_stream(self, stream: torch.cuda.Stream) -> None:
+            self.packed_qkv.record_stream(stream)
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None) -> object:
+            kwargs = kwargs or {}
+            fields = dict(zip(("self", "mat1", "mat2"), args))
+            fields.update(kwargs)
+            weight = fields.get("mat2")
+            result = func(*args, **kwargs)
+            if (
+                func is torch.ops.aten.addmm.out
+                and isinstance(weight, torch.Tensor)
+                and weight.data_ptr() in self.weights
+            ):
+                self.hits += 1
+            return result
+
+    monkeypatch.setattr(flow_graph_module, "FfnGemmMode", PackedProbe)
+    monkeypatch.setattr(compiled_dit_module, "FfnGemmMode", PackedProbe)
+    original_loop = flow_graph_module.euler_flow_loop
+    corrupted_calls = 0
+
+    def perturb_packed_time(*args, **kwargs) -> torch.Tensor:
+        nonlocal corrupted_calls
+        patch = original_loop(*args, **kwargs)
+        modes = kwargs.get("dispatch_modes", ())
+        if (
+            scenario == "packed_time_corruption"
+            and any(isinstance(mode, PackedProbe) for mode in modes)
+            and any(isinstance(mode, TimeGemmMode) for mode in modes)
+        ):
+            corrupted_calls += 1
+            patch.add_(0.25)
+        return patch
+
+    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", perturb_packed_time)
+    monkeypatch.delenv("FIRERED_TTS3_FFN_GEMM", raising=False)
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(batch_size,),
+    )
+
+    def reject_replay_scan() -> None:
+        raise AssertionError("Captured replay must not rescan packed weights")
+
+    with torch.inference_mode():
+        got = runner.run(*inputs, cfg, N_TIMESTEPS)
+        hits_after_capture = probes[0].hits
+        monkeypatch.setattr(probes[0], "validate_weights", reject_replay_scan)
+        repeated = runner.run(*inputs, cfg, N_TIMESTEPS)
+    assert finite_byte_equal(got, expected) and finite_byte_equal(repeated, expected)
+    assert hits_after_capture > 0 and probes[0].hits == hits_after_capture
+    entry = next(iter(runner.cache.values()))
+    failed = scenario == "packed_time_corruption"
+    assert runner.stats()["ffn_captures"] == int(not failed)
+    assert runner.stats()["ffn_fallbacks"] == int(failed)
+    assert (
+        runner.stats()["optimization_fallbacks"] == 0 and runner.stats()["eager"] == 0
+    )
+    assert any(isinstance(mode, PackedProbe) for mode in entry.dispatch_modes) is (
+        not failed
+    )
+    assert any(isinstance(mode, TimeGemmMode) for mode in entry.dispatch_modes)
+    assert any(isinstance(mode, Conv1dWeightCache) for mode in entry.dispatch_modes)
+    assert entry.time_table is not None
+    if failed:
+        assert (
+            corrupted_calls > 0 and "exact gate failed for packed_time" in caplog.text
+        )
