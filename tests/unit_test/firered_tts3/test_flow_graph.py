@@ -38,7 +38,8 @@ from sglang_omni.models.firered_tts3.compiled_dit import (
     TimeGemmTable,
     finite_byte_equal,
 )
-from sglang_omni.models.firered_tts3.dit import DiT
+from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
+from sglang_omni.models.firered_tts3.dit import ConvBlock, DiT
 from sglang_omni.models.firered_tts3.flow_graph import (
     FLOW_MODES,
     FlowGraphRunner,
@@ -46,6 +47,7 @@ from sglang_omni.models.firered_tts3.flow_graph import (
     flow_t_span,
     prepare_flow_dit,
 )
+from sglang_omni.models.firered_tts3.flow_precision import FlowPrecisionGate
 from sglang_omni.models.firered_tts3.model_runner import (
     FireRedTTS3ModelRunner,
     FlowState,
@@ -556,7 +558,10 @@ def test_compile_fp32_graph_captures_and_runs(tiny_dit, device) -> None:
 
 @pytest.fixture(autouse=True)
 def disable_flow_optimization_environment(monkeypatch) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
 
 
 @pytest.mark.parametrize("inherited_limit", [2, 96])
@@ -565,6 +570,7 @@ def test_explicit_time_cache_protects_original_compiled_call(
     monkeypatch: pytest.MonkeyPatch, inherited_limit: int, should_raise: bool
 ) -> None:
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
     config = torch._dynamo.config
     observed: list[tuple[int, bool, bool]] = []
@@ -621,8 +627,16 @@ def flow_dispatch_dit(tiny_dit: DiT) -> DiT:
     return tiny_dit
 
 
-def test_optimized_prepare_preserves_original_weights(monkeypatch) -> None:
-    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+@pytest.mark.parametrize(
+    "time_cache,conv_cache", [(True, False), (False, True), (True, True)]
+)
+def test_optimized_prepare_preserves_original_weights(
+    monkeypatch, time_cache: bool, conv_cache: bool
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", str(int(time_cache)))
+    monkeypatch.setenv(
+        "FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last" if conv_cache else "conv1d"
+    )
     source = tiny_cpu_dit()
     original = {
         name: parameter.detach().clone()
@@ -635,26 +649,72 @@ def test_optimized_prepare_preserves_original_weights(monkeypatch) -> None:
     for name, parameter in source.named_parameters():
         assert parameter.dtype == torch.float32
         assert torch.equal(parameter, original[name])
+    assert sum(
+        isinstance(layer, torch.nn.Conv1d) for layer in fallback.modules()
+    ) == sum(isinstance(layer, torch.nn.Conv1d) for layer in source.modules())
 
 
 @pytest.mark.parametrize("mode", ["fp32", "bf16"])
-def test_flow_caches_require_compiled_execution(monkeypatch, mode: str) -> None:
-    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+@pytest.mark.parametrize("switch", ["time", "conv"])
+def test_flow_caches_require_compiled_execution(
+    monkeypatch, mode: str, switch: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1" if switch == "time" else "0")
+    monkeypatch.setenv(
+        "FIREREDTTS3_CONV_LAYOUT",
+        "conv2d_channels_last" if switch == "conv" else "conv1d",
+    )
     with pytest.raises(ValueError, match="require a compile flow mode"):
         prepare_flow_dit(tiny_cpu_dit(), mode)
 
 
-def test_invalid_flow_cache_switches_fail(monkeypatch) -> None:
-    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "2")
-    with pytest.raises(ValueError, match="FIRERED_TTS3_PRECOMPUTE_TIME"):
+@pytest.mark.parametrize(
+    "time_switch,conv_switch,message",
+    [
+        ("2", "conv1d", "FIRERED_TTS3_PRECOMPUTE_TIME"),
+        ("0", "conv2d", "FIREREDTTS3_CONV_LAYOUT"),
+    ],
+)
+def test_invalid_flow_cache_switches_fail(
+    monkeypatch, time_switch: str, conv_switch: str, message: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", time_switch)
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", conv_switch)
+    with pytest.raises(ValueError, match=message):
         prepare_flow_dit(tiny_cpu_dit(), "compile_bf16")
 
 
 @pytest.mark.accelerator
-def test_failed_optimization_gate_keeps_original_compiled_graph(
-    flow_dispatch_dit, device, monkeypatch, caplog
+@pytest.mark.parametrize(
+    "corrupted_stage,atol,conv_enabled,accepted",
+    [
+        ("conv", 0.0, True, False),
+        ("conv", 0.5, True, True),
+        ("conv", 0.125, True, False),
+        ("observed", 10.0, True, False),
+        ("time", 10.0, False, False),
+        ("time", 10.0, True, False),
+    ],
+)
+def test_flow_tolerance_only_relaxes_convolution_gate(
+    flow_dispatch_dit: DiT,
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    corrupted_stage: str,
+    atol: float,
+    conv_enabled: bool,
+    accepted: bool,
 ) -> None:
-    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", str(atol))
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+    monkeypatch.setenv(
+        "FIRERED_TTS3_PRECOMPUTE_TIME", "1" if corrupted_stage == "time" else "0"
+    )
+    monkeypatch.setenv(
+        "FIREREDTTS3_CONV_LAYOUT",
+        "conv2d_channels_last" if conv_enabled else "conv1d",
+    )
     execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
     assert isinstance(execution, CompiledDiTExecutor)
     runner = tiny_runner(
@@ -665,24 +725,36 @@ def test_failed_optimization_gate_keeps_original_compiled_graph(
         capture_sizes=(1,),
     )
     original_loop = flow_graph_module.euler_flow_loop
-    optimized_calls = 0
+    corrupted_calls = 0
+    injected_delta = 0.25
 
-    def perturb_cached_flow(*args, **kwargs) -> torch.Tensor:
-        nonlocal optimized_calls
+    def perturb_selected_flow(*args, **kwargs) -> torch.Tensor:
+        nonlocal corrupted_calls
         patch = original_loop(*args, **kwargs)
-        if kwargs.get("dispatch_modes"):
-            optimized_calls += 1
-            return patch + 1
-        else:
-            return patch
+        modes = kwargs.get("dispatch_modes", ())
+        has_time = any(isinstance(mode, TimeGemmMode) for mode in modes)
+        has_conv = any(isinstance(mode, Conv1dWeightCache) for mode in modes)
+        should_corrupt = (
+            (
+                corrupted_stage == "observed"
+                and kwargs.get("executor") is not None
+                and not modes
+            )
+            or (corrupted_stage == "time" and has_time and not has_conv)
+            or (corrupted_stage == "conv" and has_conv)
+        )
+        if should_corrupt:
+            corrupted_calls += 1
+            patch.add_(injected_delta)
+        return patch
 
-    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", perturb_cached_flow)
+    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", perturb_selected_flow)
     generator = torch.Generator(device=device).manual_seed(71)
     hist, noise, cond = make_inputs(device, generator, 1)
     cfg = torch.full((1, 1, 1), 1.2, device=device)
     with torch.inference_mode():
         got = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
-        calls_after_capture = optimized_calls
+        calls_after_capture = corrupted_calls
         repeated = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
         expected = original_loop(
             execution.original,
@@ -694,23 +766,36 @@ def test_failed_optimization_gate_keeps_original_compiled_graph(
             PATCH_SIZE,
             dit_dtype=torch.bfloat16,
         )
-    assert calls_after_capture > 0 and optimized_calls == calls_after_capture
-    assert "Complete Flow exact gate failed" in caplog.text
+        if accepted:
+            expected = expected + injected_delta
+    assert calls_after_capture > 0 and corrupted_calls == calls_after_capture
     assert got is not None and torch.equal(got, expected)
     assert torch.equal(got, repeated)
     assert runner.enabled and runner.dit is execution and runner.dit is not fallback
-    assert runner.stats()["optimized_captures"] == 0
-    assert runner.stats()["optimization_fallbacks"] == 1
-    assert runner.stats()["captures"] == 1 and runner.stats()["eager"] == 0
+    stats = runner.stats()
+    assert stats["optimized_captures"] == int(accepted)
+    assert stats["optimization_fallbacks"] == int(not accepted)
+    assert stats["captures"] == 1 and stats["eager"] == 0
     entry = next(iter(runner.cache.values()))
-    assert entry.dispatch_modes == () and entry.time_table is None
+    if accepted:
+        assert any(isinstance(mode, Conv1dWeightCache) for mode in entry.dispatch_modes)
+        assert "Flow optimization rejected" not in caplog.text
+    else:
+        assert entry.dispatch_modes == () and entry.time_table is None
+        assert "Flow optimization rejected" in caplog.text
 
 
 @pytest.mark.accelerator
+@pytest.mark.parametrize(
+    "time_cache,conv_cache", [(True, False), (False, True), (True, True)]
+)
 def test_optimized_flow_hits_dispatch_and_retains_time_table(
-    flow_dispatch_dit, device, monkeypatch
+    flow_dispatch_dit, device, monkeypatch, time_cache: bool, conv_cache: bool
 ) -> None:
-    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", str(int(time_cache)))
+    monkeypatch.setenv(
+        "FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last" if conv_cache else "conv1d"
+    )
     cached_time_hits = collections.Counter()
     original_dispatch = TimeGemmMode.__torch_dispatch__
 
@@ -754,17 +839,35 @@ def test_optimized_flow_hits_dispatch_and_retains_time_table(
     assert runner.stats()["optimization_fallbacks"] == 0
     assert runner.stats()["eager"] == 0
     entry = next(iter(runner.cache.values()))
-    assert len(entry.dispatch_modes) == 1
-    time_mode = entry.dispatch_modes[0]
-    assert isinstance(time_mode, TimeGemmMode)
-    assert time_mode.table is entry.time_table and entry.time_table is not None
-    assert len(entry.time_table.steps) == N_TIMESTEPS
-    assert cached_time_hits[id(time_mode)] > 0
-    table_ref = weakref.ref(entry.time_table)
-    value_ref = weakref.ref(next(iter(entry.time_table.steps[0].values())).output)
-    del time_mode
-    gc.collect()
-    assert table_ref() is entry.time_table and value_ref() is not None
+    assert sum(isinstance(mode, TimeGemmMode) for mode in entry.dispatch_modes) == int(
+        time_cache
+    )
+    assert sum(
+        isinstance(mode, Conv1dWeightCache) for mode in entry.dispatch_modes
+    ) == int(conv_cache)
+    if time_cache:
+        time_mode = next(
+            mode for mode in entry.dispatch_modes if isinstance(mode, TimeGemmMode)
+        )
+        assert time_mode.table is entry.time_table and entry.time_table is not None
+        assert len(entry.time_table.steps) == N_TIMESTEPS
+        assert cached_time_hits[id(time_mode)] > 0
+        table_ref = weakref.ref(entry.time_table)
+        value_ref = weakref.ref(next(iter(entry.time_table.steps[0].values())).output)
+        del time_mode
+        gc.collect()
+        assert table_ref() is entry.time_table and value_ref() is not None
+    else:
+        assert entry.time_table is None
+    if conv_cache:
+        assert (
+            next(
+                mode
+                for mode in entry.dispatch_modes
+                if isinstance(mode, Conv1dWeightCache)
+            ).hits
+            > 0
+        )
     def reject_time_weight_scan(self: TimeConditionCache) -> None:
         raise AssertionError("Time weights must not be scanned during replay")
 
@@ -779,7 +882,126 @@ def test_optimized_flow_hits_dispatch_and_retains_time_table(
     runner.cache.clear()
     del entry
     gc.collect()
-    assert table_ref() is None and value_ref() is None
+    if time_cache:
+        assert table_ref() is None and value_ref() is None
+
+
+@pytest.mark.parametrize(
+    "device_name", ["cpu", pytest.param("cuda", marks=pytest.mark.accelerator)]
+)
+def test_conv_weight_cache_preserves_model_and_rng(device_name: str) -> None:
+    if device_name == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    device = torch.device(device_name)
+    source = ConvBlock(8, 8).to(device=device).eval()
+    original = {
+        name: (value.detach().clone(), value.data_ptr(), value.stride())
+        for name, value in source.state_dict().items()
+    }
+    cpu_rng = torch.random.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state(device) if device.type == "cuda" else None
+    cache = Conv1dWeightCache(source)
+    cache.validate_weights()
+    assert cache.version_checks_available
+    assert torch.equal(torch.random.get_rng_state(), cpu_rng)
+    if cuda_rng is not None:
+        assert torch.equal(torch.cuda.get_rng_state(device), cuda_rng)
+    assert source.state_dict().keys() == original.keys()
+    assert sum(isinstance(layer, torch.nn.Conv1d) for layer in source.modules()) == 2
+    for name, value in source.state_dict().items():
+        tensor, pointer, stride = original[name]
+        assert torch.equal(value, tensor)
+        assert value.data_ptr() == pointer and value.stride() == stride
+
+
+@pytest.mark.parametrize(
+    "device_name", ["cpu", pytest.param("cuda", marks=pytest.mark.accelerator)]
+)
+@pytest.mark.parametrize("operator", ["conv1d", "convolution_3d", "convolution_4d"])
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_conv_weight_cache_dispatch_contract(
+    device_name: str, operator: str, with_bias: bool
+) -> None:
+    if device_name == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    device = torch.device(device_name)
+    source = torch.nn.Conv1d(4, 4, 3, padding=1).to(device=device, dtype=torch.bfloat16)
+    with torch.no_grad():
+        source.weight.zero_()
+        source.bias.fill_(3.0)
+        for channel in range(4):
+            source.weight[channel, channel, 1] = 0.5
+            source.weight[channel, (channel + 1) % 4, 0] = 0.25
+    inputs = ((torch.arange(96, device=device) % 8) - 4).reshape(2, 4, 12)
+    inputs = inputs.to(dtype=torch.bfloat16)
+    cache = Conv1dWeightCache(source)
+    bias = source.bias if with_bias else None
+
+    def call(weight: torch.Tensor) -> torch.Tensor:
+        if operator == "conv1d":
+            return torch.ops.aten.conv1d.default(inputs, weight, bias, padding=[1])
+        elif operator == "convolution_3d":
+            return torch.ops.aten.convolution.default(
+                inputs, weight, bias, [1], [1], [1], False, [0], 1
+            )
+        else:
+            return torch.ops.aten.convolution.default(
+                inputs.unsqueeze(2),
+                weight.unsqueeze(2),
+                bias,
+                [1, 1],
+                [0, 1],
+                [1, 1],
+                False,
+                [0, 0],
+                1,
+            )
+
+    with torch.inference_mode():
+        want = call(source.weight)
+        with cache:
+            got = call(source.weight)
+        assert cache.hits == 1 and cache.misses == 0
+        unrelated_weight = source.weight.clone()
+        with cache:
+            unhandled = call(unrelated_weight)
+    assert got.shape == want.shape and got.stride() == want.stride()
+    assert got.dtype == want.dtype == torch.bfloat16
+    assert torch.equal(got, want)
+    assert torch.equal(unhandled, want)
+    assert cache.hits == 1 and cache.misses == 1
+    cache.validate_weights()
+
+
+def test_conv_weight_cache_rejects_same_pointer_other_view() -> None:
+    source = torch.nn.Conv1d(4, 4, 3, padding=1)
+    cache = Conv1dWeightCache(source)
+    different_view = source.weight.transpose(0, 1)
+    assert different_view.data_ptr() == source.weight.data_ptr()
+    assert different_view.shape == source.weight.shape
+    inputs = torch.randn(2, 4, 12)
+    with torch.inference_mode():
+        want = F.conv1d(inputs, different_view, padding=1)
+        with cache:
+            got = F.conv1d(inputs, different_view, padding=1)
+    assert torch.equal(got, want)
+    assert cache.hits == 0 and cache.misses == 1
+
+
+@pytest.mark.parametrize("mutation", ["inplace", "replace", "stride"])
+def test_conv_weight_cache_detects_weight_changes(mutation: str) -> None:
+    source = torch.nn.Conv1d(4, 4, 3, padding=1)
+    cache = Conv1dWeightCache(source)
+    cache.validate_weights()
+    with torch.no_grad():
+        if mutation == "inplace":
+            source.weight.add_(1.0)
+        elif mutation == "replace":
+            source.weight = torch.nn.Parameter(source.weight.clone())
+        else:
+            source.weight.transpose_(0, 1)
+    with pytest.raises(RuntimeError, match="Convolution weight changed"):
+        cache.validate_weights()
 
 
 def test_time_exact_gate_requires_finite_identical_bytes() -> None:
@@ -886,56 +1108,364 @@ def test_time_condition_cache_detects_weight_changes(mutation: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["compile_fp32", "compile_bf16"])
-def test_compiled_time_cache_enabled_by_default(
+def test_compiled_flow_caches_enabled_by_default(
     monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
+    monkeypatch.delenv("FIREREDTTS3_CONV_LAYOUT", raising=False)
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
     execution, fallback = prepare_flow_dit(tiny_cpu_dit(), mode)
     assert isinstance(execution, CompiledDiTExecutor)
     runner = tiny_runner(
         execution, torch.device("cpu"), mode=mode, dit_fallback=fallback
     )
-    assert runner.precompute_time_conditions
+    assert runner.precompute_time_conditions and runner.optimize_convolution
     assert runner.executor is execution
 
 
 @pytest.mark.parametrize("mode", ["fp32", "bf16"])
-def test_eager_time_cache_disabled_by_default(
+def test_eager_flow_caches_disabled_by_default(
     monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
+    monkeypatch.delenv("FIREREDTTS3_CONV_LAYOUT", raising=False)
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
     execution, fallback = prepare_flow_dit(tiny_cpu_dit(), mode)
     assert execution is fallback
     runner = tiny_runner(
         execution, torch.device("cpu"), mode=mode, dit_fallback=fallback
     )
-    assert not runner.precompute_time_conditions
+    assert not runner.precompute_time_conditions and not runner.optimize_convolution
     assert runner.executor is None
 
 
 @pytest.mark.parametrize("mode", ["compile_fp32", "compile_bf16"])
-def test_compiled_time_cache_can_be_disabled(
-    monkeypatch: pytest.MonkeyPatch, mode: str
+@pytest.mark.parametrize(
+    "disabled,time_enabled,conv_enabled",
+    [("time", False, True), ("conv", True, False), ("both", False, False)],
+)
+def test_compiled_flow_caches_can_be_disabled_independently(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    disabled: str,
+    time_enabled: bool,
+    conv_enabled: bool,
 ) -> None:
-    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.delenv("FIRERED_TTS3_PRECOMPUTE_TIME", raising=False)
+    monkeypatch.delenv("FIREREDTTS3_CONV_LAYOUT", raising=False)
+    if disabled in ("time", "both"):
+        monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    if disabled in ("conv", "both"):
+        monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
     execution, fallback = prepare_flow_dit(tiny_cpu_dit(), mode)
-    assert not isinstance(execution, CompiledDiTExecutor)
+    assert isinstance(execution, CompiledDiTExecutor) == (time_enabled or conv_enabled)
     runner = tiny_runner(
         execution, torch.device("cpu"), mode=mode, dit_fallback=fallback
     )
-    assert not runner.precompute_time_conditions
-    assert runner.executor is None
+    assert runner.precompute_time_conditions == time_enabled
+    assert runner.optimize_convolution == conv_enabled
+    if time_enabled or conv_enabled:
+        assert runner.executor is execution
+    else:
+        assert runner.executor is None
+
+
+@pytest.mark.parametrize("source", ["constructor", "environment"])
+def test_flow_precision_explicit_exact_checks_remain_byte_exact(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+    gate = (
+        FlowPrecisionGate()
+        if source == "constructor"
+        else FlowPrecisionGate.from_environment()
+    )
+    reference = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    exact = gate.compare(reference.t().contiguous().t(), reference)
+    assert exact.accepted and exact.byte_exact
+    assert not gate.compare(torch.tensor([0.0]), torch.tensor([-0.0])).accepted
+    changed = torch.nextafter(reference, torch.full_like(reference, float("inf")))
+    assert not gate.compare(changed, reference).accepted
+
+
+def test_flow_precision_default_budget_accepts_only_small_roundoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FIRERED_TTS3_FLOW_ATOL", raising=False)
+    monkeypatch.delenv("FIRERED_TTS3_FLOW_RTOL", raising=False)
+    gate = FlowPrecisionGate.from_environment()
+    reference = torch.tensor([[0.0, 1.0]])
+    close = torch.tensor([[0.0005, 1.005]])
+    assert gate.compare(close, reference).accepted
+    assert not FlowPrecisionGate().compare(close, reference).accepted
+    assert not gate.compare(torch.tensor([[0.002, 1.0]]), reference).accepted
+    assert not gate.compare(torch.tensor([[0.0, 1.02]]), reference).accepted
+
+
+@pytest.mark.parametrize(
+    "variable", ["FIRERED_TTS3_FLOW_ATOL", "FIRERED_TTS3_FLOW_RTOL"]
+)
+@pytest.mark.parametrize("value", ["-1", "nan", "inf", "-inf", "invalid"])
+def test_flow_precision_rejects_invalid_environment(
+    monkeypatch: pytest.MonkeyPatch, variable: str, value: str
+) -> None:
+    monkeypatch.setenv(variable, value)
+    with pytest.raises(ValueError, match=variable):
+        FlowPrecisionGate.from_environment()
+
+
+@pytest.mark.parametrize("target", ["actual", "expected", "both"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_flow_precision_rejects_nonfinite_values(target: str, value: float) -> None:
+    reference = torch.ones(2, 3)
+    actual = reference.clone()
+    if target in ("actual", "both"):
+        actual[1, 2] = value
+    if target in ("expected", "both"):
+        reference[1, 2] = value
+    result = FlowPrecisionGate(atol=100.0, rtol=100.0).compare(actual, reference)
+    assert not result.accepted and not result.finite
+
+
+@pytest.mark.parametrize("mismatch", ["shape", "dtype", "device"])
+def test_flow_precision_rejects_incompatible_tensors(mismatch: str) -> None:
+    reference = torch.ones(2, 3)
+    if mismatch == "shape":
+        actual = reference.flatten()
+    elif mismatch == "dtype":
+        actual = reference.double()
+    else:
+        actual = torch.empty_like(reference, device="meta")
+    result = FlowPrecisionGate(atol=100.0, rtol=100.0).compare(actual, reference)
+    assert not result.accepted and not result.schema_valid
+
+
+@pytest.mark.parametrize(
+    "reference,actual,atol,rtol,accepted",
+    [
+        (0.0, 0.125, 0.125, 0.0, True),
+        (0.0, 0.125 + 2**-26, 0.125, 0.0, False),
+        (2.0, 2.25, 0.0, 0.125, True),
+        (2.0, 2.25 + 2**-22, 0.0, 0.125, False),
+        (-2.0, -2.25, 0.0, 0.125, True),
+        (2.0, 2.375, 0.125, 0.125, True),
+        (2.0, 2.375 + 2**-22, 0.125, 0.125, False),
+        (0.0, 2**-24, 0.0, 100.0, False),
+        (2**-24, 2**-23, 0.0, 0.5, False),
+    ],
+)
+def test_flow_precision_elementwise_tolerance_boundaries(
+    reference: float,
+    actual: float,
+    atol: float,
+    rtol: float,
+    accepted: bool,
+) -> None:
+    result = FlowPrecisionGate(atol=atol, rtol=rtol).compare(
+        torch.tensor([actual]), torch.tensor([reference])
+    )
+    assert result.accepted == accepted
+    assert result.out_of_bounds == int(not accepted)
+
+
+def test_flow_precision_rejects_one_outlier_in_one_batch_row() -> None:
+    reference = torch.ones(8, 4, 64)
+    actual = reference.clone()
+    actual[-1, -1, -1] += 0.25
+    result = FlowPrecisionGate(atol=0.125, rtol=0.0).compare(actual, reference)
+    assert not result.accepted and result.out_of_bounds == 1
+    assert result.rmse < 0.125 and result.max_abs == 0.25
 
 
 __all__ = []
 
 
-@pytest.mark.parametrize("with_time", [True, False])
+@pytest.fixture
+def controlled_conv_flow(device: torch.device) -> torch.nn.Module:
+    class ConvFlow(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv1d(1024, 1024, 3, padding=1, bias=False)
+            with torch.no_grad():
+                self.conv.weight.zero_()
+                for channel in range(REDAE_DIM):
+                    self.conv.weight[channel, channel, 1] = 0.125
+
+        def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            padded = F.pad(x, (0, 1024 - x.shape[-1]))
+            output = self.conv(padded.transpose(1, 2)).transpose(1, 2)
+            return output[:, :, :REDAE_DIM]
+
+    return ConvFlow().to(device=device).eval()
+
+
+@pytest.mark.accelerator
+def test_controlled_convolution_replay_owns_plan_without_weight_scan(
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+    controlled_conv_flow: torch.nn.Module,
+) -> None:
+    from sglang_omni.models.firered_tts3.conv_plan import ControlledConvPlan
+
+    frontend = pytest.importorskip("cudnn")
+    if (
+        torch.cuda.get_device_capability(device) != (12, 0)
+        or torch.backends.cudnn.version() != 92000
+        or frontend.backend_version() != 92000
+        or frontend.__version__ != "1.28.0"
+    ):
+        pytest.skip("The controlled convolution plan requires its validated CUDA stack")
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+
+    calls = 0
+    original_call = ControlledConvPlan.__call__
+
+    def count_plan_calls(
+        self, inputs: torch.Tensor, weight: torch.Tensor
+    ) -> torch.Tensor:
+        nonlocal calls
+        calls += 1
+        return original_call(self, inputs, weight)
+
+    monkeypatch.setattr(ControlledConvPlan, "__call__", count_plan_calls)
+    original_loop = flow_graph_module.euler_flow_loop
+    generic_calls = 0
+
+    def perturb_generic_convolution(*args, **kwargs) -> torch.Tensor:
+        nonlocal generic_calls
+        patch = original_loop(*args, **kwargs)
+        if any(
+            isinstance(mode, Conv1dWeightCache) and not mode.use_controlled_plan
+            for mode in kwargs.get("dispatch_modes", ())
+        ):
+            generic_calls += 1
+            patch.add_(1.0)
+        return patch
+
+    monkeypatch.setattr(
+        flow_graph_module, "euler_flow_loop", perturb_generic_convolution
+    )
+    execution, fallback = prepare_flow_dit(controlled_conv_flow, "compile_bf16")
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(4,),
+    )
+    generator = torch.Generator(device=device).manual_seed(817)
+    hist, noise, cond = make_inputs(device, generator, 4)
+    cfg = torch.full((4, 1, 1), 1.2, device=device)
+    with torch.inference_mode():
+        before = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+    assert before is not None and not torch.equal(before, noise)
+    assert generic_calls > 0 and calls > 0
+    assert runner.stats()["optimized_captures"] == 1
+    entry = next(iter(runner.cache.values()))
+    captured_mode = next(
+        mode for mode in entry.dispatch_modes if isinstance(mode, Conv1dWeightCache)
+    )
+    assert captured_mode.use_controlled_plan
+    assert captured_mode.controlled_plan is not None
+    assert runner.conv_cache is not captured_mode
+    assert not runner.conv_cache.use_controlled_plan
+    plan_ref = weakref.ref(captured_mode.controlled_plan)
+    del captured_mode, entry
+    captured_plan_calls = calls
+    captured_generic_calls = generic_calls
+
+    def unexpected_scan(self) -> None:
+        raise AssertionError("Graph replay must not scan immutable weights")
+
+    monkeypatch.setattr(Conv1dWeightCache, "validate_weights", unexpected_scan)
+    with torch.inference_mode():
+        repeated = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+    torch.cuda.synchronize(device)
+    assert finite_byte_equal(repeated, before)
+    assert calls == captured_plan_calls
+    assert generic_calls == captured_generic_calls
+    assert runner.stats()["captures"] == 1
+    assert runner.stats()["hits"] == 1
+    assert runner.stats()["optimization_fallbacks"] == 0
+    gc.collect()
+    assert plan_ref() is not None
+    runner.cache.clear()
+    gc.collect()
+    assert plan_ref() is None
+
+
+@pytest.mark.accelerator
+def test_generic_convolution_does_not_require_controlled_plan(
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+    controlled_conv_flow: torch.nn.Module,
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+    failed_builds = 0
+
+    def unavailable_plan(inputs: torch.Tensor, weight: torch.Tensor):
+        nonlocal failed_builds
+        failed_builds += 1
+        raise RuntimeError("Controlled convolution support probe")
+
+    monkeypatch.setattr(
+        "sglang_omni.models.firered_tts3.conv_cache.ControlledConvPlan",
+        unavailable_plan,
+    )
+    execution, fallback = prepare_flow_dit(controlled_conv_flow, "compile_bf16")
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(2, 4),
+    )
+    generator = torch.Generator(device=device).manual_seed(819)
+    for batch in (3, 4, 2, 3):
+        hist, noise, cond = make_inputs(device, generator, batch)
+        cfg = torch.full((batch, 1, 1), 1.2, device=device)
+        with torch.inference_mode():
+            actual = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+            expected = euler_flow_loop(
+                execution.original,
+                torch.cat([hist, noise], dim=1),
+                cond,
+                runner.t_span,
+                cfg,
+                N_TIMESTEPS,
+                PATCH_SIZE,
+                dit_dtype=torch.bfloat16,
+            )
+        assert actual is not None and torch.equal(actual, expected)
+    assert failed_builds == 0
+    assert runner.enabled and runner.dit is execution
+    assert runner.conv_cache is not None and not runner.conv_cache.use_controlled_plan
+    assert runner.conv_cache.controlled_plan is None
+    for entry in runner.cache.values():
+        assert entry.dispatch_modes == (runner.conv_cache,)
+    assert runner.stats()["optimized_captures"] == 2
+    assert runner.stats()["optimization_fallbacks"] == 0
+    assert runner.stats()["captures"] == 2 and runner.stats()["hits"] == 2
+    assert runner.stats()["eager"] == 0
+
+
+@pytest.mark.parametrize(
+    "with_time,with_conv,with_plan",
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
 def test_flow_entry_records_external_resources_once_per_replay_stream(
+    monkeypatch: pytest.MonkeyPatch,
     with_time: bool,
+    with_conv: bool,
+    with_plan: bool,
 ) -> None:
     class RecordingTensor:
         def __init__(self) -> None:
@@ -944,9 +1474,15 @@ def test_flow_entry_records_external_resources_once_per_replay_stream(
         def record_stream(self, stream) -> None:
             self.streams.append(stream)
 
+    class FakeConvCache:
+        pass
+
+    monkeypatch.setattr(flow_graph_module, "Conv1dWeightCache", FakeConvCache)
     static = [RecordingTensor() for _ in range(3)]
     span = RecordingTensor()
     time_outputs = [RecordingTensor() for _ in range(2)] if with_time else []
+    packed_weights = [RecordingTensor() for _ in range(2)] if with_conv else []
+    workspace = RecordingTensor() if with_plan else None
     table = (
         SimpleNamespace(
             steps=tuple(
@@ -956,15 +1492,29 @@ def test_flow_entry_records_external_resources_once_per_replay_stream(
         if with_time
         else None
     )
+    modes = []
+    if with_conv:
+        mode = FakeConvCache()
+        mode.weights = {
+            index: SimpleNamespace(packed=value)
+            for index, value in enumerate(packed_weights)
+        }
+        mode.controlled_plan = (
+            SimpleNamespace(workspace=workspace) if workspace is not None else None
+        )
+        modes.append(mode)
     entry = flow_graph_module.FlowGraphEntry(
         graph=object(),
         xt=static[0],
         cond=static[1],
         cfg=static[2],
         time_table=table,
+        dispatch_modes=tuple(modes),
         t_span=span,
     )
-    resources = static + [span] + time_outputs
+    resources = static + [span] + time_outputs + packed_weights
+    if workspace is not None:
+        resources.append(workspace)
     first = SimpleNamespace(device=SimpleNamespace(index=0), cuda_stream=11)
     same_native_stream = SimpleNamespace(
         device=SimpleNamespace(index=0), cuda_stream=11
@@ -981,8 +1531,129 @@ def test_flow_entry_records_external_resources_once_per_replay_stream(
 
 
 @pytest.mark.accelerator
+@pytest.mark.parametrize("failure", ["support", "precision", "capture", "replay"])
+def test_convolution_failure_retains_validated_time_cache(
+    flow_dispatch_dit, device, monkeypatch, failure: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last")
+    execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(4,),
+    )
+    original_loop = flow_graph_module.euler_flow_loop
+    attempted_plans = set()
+    time_graph_captures = 0
+
+    def fail_convolution(*args, **kwargs):
+        nonlocal time_graph_captures
+        patch = original_loop(*args, **kwargs)
+        conv_modes = [
+            mode
+            for mode in kwargs.get("dispatch_modes", ())
+            if isinstance(mode, Conv1dWeightCache)
+        ]
+        if conv_modes:
+            attempted_plans.add(conv_modes[0].use_controlled_plan)
+            if failure == "support":
+                raise RuntimeError("Unsupported convolution plan")
+            elif failure == "capture" and torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Convolution capture failed")
+            elif failure == "precision" or (
+                failure == "replay" and torch.cuda.is_current_stream_capturing()
+            ):
+                patch.add_(1.0)
+        elif torch.cuda.is_current_stream_capturing():
+            time_graph_captures += 1
+        return patch
+
+    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", fail_convolution)
+    generator = torch.Generator(device=device).manual_seed(83)
+    for batch in (3, 4):
+        hist, noise, cond = make_inputs(device, generator, batch)
+        cfg = torch.full((batch, 1, 1), 1.2, device=device)
+        with torch.inference_mode():
+            actual = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+            expected = original_loop(
+                execution.original,
+                torch.cat([hist, noise], dim=1),
+                cond,
+                runner.t_span,
+                cfg,
+                N_TIMESTEPS,
+                PATCH_SIZE,
+                dit_dtype=torch.bfloat16,
+            )
+        assert actual is not None and torch.equal(actual, expected)
+    entry = next(iter(runner.cache.values()))
+    assert entry.time_table is not None
+    assert len(entry.dispatch_modes) == 1
+    assert isinstance(entry.dispatch_modes[0], TimeGemmMode)
+    expected_plans = (
+        {False, True}
+        if torch.cuda.get_device_capability(device) == (12, 0)
+        else {False}
+    )
+    assert attempted_plans == expected_plans
+    assert time_graph_captures == 1
+    assert runner.stats()["optimized_captures"] == 1
+    assert runner.stats()["optimization_fallbacks"] == 1
+    assert runner.stats()["hits"] == 1 and runner.stats()["eager"] == 0
+
+
+@pytest.mark.accelerator
+@pytest.mark.parametrize("failed_probe", [1, 2])
+def test_all_time_probes_must_pass_before_trying_convolution(
+    flow_dispatch_dit, device, monkeypatch, failed_probe: int
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last")
+    execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
+    runner = tiny_runner(
+        execution,
+        device,
+        mode="compile_bf16",
+        dit_fallback=fallback,
+        capture_sizes=(1,),
+    )
+    original_loop = flow_graph_module.euler_flow_loop
+    time_calls = 0
+    conv_calls = 0
+
+    def fail_later_time_probe(*args, **kwargs):
+        nonlocal time_calls, conv_calls
+        patch = original_loop(*args, **kwargs)
+        modes = kwargs.get("dispatch_modes", ())
+        if any(isinstance(mode, Conv1dWeightCache) for mode in modes):
+            conv_calls += 1
+            raise RuntimeError("Convolution must not run before time validation")
+        elif any(isinstance(mode, TimeGemmMode) for mode in modes):
+            if time_calls == failed_probe:
+                patch.add_(1.0)
+            time_calls += 1
+        return patch
+
+    monkeypatch.setattr(flow_graph_module, "euler_flow_loop", fail_later_time_probe)
+    hist, noise, cond = make_inputs(
+        device, torch.Generator(device=device).manual_seed(89), 1
+    )
+    cfg = torch.ones(1, 1, 1, device=device)
+    with torch.inference_mode():
+        actual = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
+    assert torch.equal(actual, noise)
+    entry = next(iter(runner.cache.values()))
+    assert entry.time_table is None and entry.dispatch_modes == ()
+    assert time_calls == failed_probe + 1 and conv_calls == 0
+
+
+@pytest.mark.accelerator
 def test_time_tables_follow_graph_lru_eviction(flow_dispatch_dit, device, monkeypatch):
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
     execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
     runner = tiny_runner(
         execution,

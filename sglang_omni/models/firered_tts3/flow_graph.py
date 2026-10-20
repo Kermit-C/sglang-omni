@@ -44,8 +44,12 @@ from sglang_omni.models.firered_tts3.compiled_dit import (
     TimeConditionCache,
     TimeGemmMode,
     TimeGemmTable,
-    finite_byte_equal,
 )
+from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
+from sglang_omni.models.firered_tts3.conv_plan import (
+    INPUT_SHAPE as CONTROLLED_CONV_INPUT_SHAPE,
+)
+from sglang_omni.models.firered_tts3.flow_precision import FlowPrecisionGate
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +76,21 @@ def flow_dit_dtype(mode: str) -> torch.dtype:
     return torch.bfloat16 if mode.endswith("bf16") else torch.float32
 
 
-def flow_optimizations(mode: FlowMode) -> bool:
-    default = "1" if mode.startswith("compile") else "0"
-    time_cache = os.environ.get("FIRERED_TTS3_PRECOMPUTE_TIME", default)
+def flow_optimizations(mode: FlowMode) -> tuple[bool, bool]:
+    compiled = mode.startswith("compile")
+    time_cache = os.environ.get(
+        "FIRERED_TTS3_PRECOMPUTE_TIME", "1" if compiled else "0"
+    )
+    conv_layout = os.environ.get(
+        "FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last" if compiled else "conv1d"
+    )
     if time_cache not in ("0", "1"):
         raise ValueError("FIRERED_TTS3_PRECOMPUTE_TIME must be 0 or 1")
-    return time_cache == "1"
+    if conv_layout not in ("conv1d", "conv2d_channels_last"):
+        raise ValueError(
+            "FIREREDTTS3_CONV_LAYOUT must be conv1d or conv2d_channels_last"
+        )
+    return time_cache == "1", conv_layout == "conv2d_channels_last"
 
 
 def prepare_flow_dit(
@@ -98,15 +111,15 @@ def prepare_flow_dit(
     """
     if mode not in FLOW_MODES:
         raise ValueError(f"unknown flow mode {mode!r}; expected one of {FLOW_MODES}")
-    time_cache = flow_optimizations(mode)
-    if time_cache and not mode.startswith("compile"):
-        raise ValueError("Flow time caches require a compile flow mode")
+    time_cache, conv_cache = flow_optimizations(mode)
+    if (time_cache or conv_cache) and not mode.startswith("compile"):
+        raise ValueError("Flow time/convolution caches require a compile flow mode")
     if mode == "fp32":
         return dit, dit
     if mode.endswith("bf16"):
         dit = copy.deepcopy(dit).to(dtype=torch.bfloat16)
     if mode.startswith("compile"):
-        if time_cache:
+        if time_cache or conv_cache:
             return CompiledDiTExecutor(dit), dit
         return (
             torch.compile(dit, dynamic=False, options={"epilogue_fusion": False}),
@@ -196,6 +209,12 @@ class FlowGraphEntry:
             for step in self.time_table.steps:
                 for value in step.values():
                     value.output.record_stream(stream)
+        for mode in self.dispatch_modes:
+            if isinstance(mode, Conv1dWeightCache):
+                for weight in mode.weights.values():
+                    weight.packed.record_stream(stream)
+                if mode.controlled_plan is not None:
+                    mode.controlled_plan.workspace.record_stream(stream)
         # note (Codex): replay bypasses Python dispatch, so retain each registered stream.
         self.replay_streams[key] = stream
 
@@ -231,18 +250,19 @@ class FlowGraphRunner:
         precompute_time_conditions: bool | None = None,
     ) -> None:
         self.mode = mode
+        self.precision_gate = FlowPrecisionGate.from_environment()
         self.dit = dit
         self.dit_dtype = flow_dit_dtype(mode)
         self.dit_fallback = dit_fallback if dit_fallback is not None else dit
-        time_cache = flow_optimizations(mode)
+        time_cache, self.optimize_convolution = flow_optimizations(mode)
         self.precompute_time_conditions = (
             time_cache
             if precompute_time_conditions is None
             else precompute_time_conditions
         )
-        self.optimize = self.precompute_time_conditions
+        self.optimize = self.precompute_time_conditions or self.optimize_convolution
         if self.optimize and not mode.startswith("compile"):
-            raise ValueError("Flow time caches require a compile flow mode")
+            raise ValueError("Flow time/convolution caches require a compile flow mode")
         if isinstance(dit, CompiledDiTExecutor):
             self.executor = dit
         elif self.optimize:
@@ -251,6 +271,7 @@ class FlowGraphRunner:
         else:
             self.executor = None
         self.time_cache: TimeConditionCache | None = None
+        self.conv_cache: Conv1dWeightCache | None = None
         self.t_span = t_span.clone() if self.optimize else t_span
         self.n_timesteps = int(n_timesteps)
         self.patch_size = int(patch_size)
@@ -288,6 +309,7 @@ class FlowGraphRunner:
             **self.counters,
             "cache_size": len(self.cache),
             "precompute_time_conditions": self.precompute_time_conditions,
+            "optimize_convolution": self.optimize_convolution,
             "optimization_enabled": self.optimize,
         }
 
@@ -379,6 +401,7 @@ class FlowGraphRunner:
         executor = self.executor if self.dit is not self.dit_fallback else None
         time_table = None
         time_mode = None
+        conv_mode = None
         modes: tuple[TorchDispatchMode, ...] = ()
 
         def body(
@@ -386,8 +409,13 @@ class FlowGraphRunner:
             condition: torch.Tensor,
             scales: torch.Tensor,
             active_modes: tuple[TorchDispatchMode, ...],
+            *,
+            observed: bool = False,
         ) -> torch.Tensor:
-            return euler_flow_loop(
+            active_time = time_mode if time_mode in active_modes else None
+            active_conv = conv_mode if conv_mode in active_modes else None
+            conv_hits = active_conv.hits if active_conv is not None else 0
+            result = euler_flow_loop(
                 self.dit,
                 state,
                 condition,
@@ -396,16 +424,26 @@ class FlowGraphRunner:
                 self.n_timesteps,
                 self.patch_size,
                 dit_dtype=self.dit_dtype,
-                executor=executor if active_modes else None,
+                executor=executor if observed else None,
                 dispatch_modes=active_modes,
-                time_mode=time_mode if active_modes else None,
+                time_mode=active_time,
             )
+            if active_conv is not None:
+                expected = len(active_conv.weights) * self.n_timesteps
+                if expected == 0 or active_conv.hits - conv_hits != expected:
+                    raise TimeCacheUnavailable(
+                        "Compiled convolution schema was not fully handled"
+                    )
+            return result
+
+        probes: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
 
         def capture_graph(
-            active_modes: tuple[TorchDispatchMode, ...]
+            active_modes: tuple[TorchDispatchMode, ...],
+            gate: FlowPrecisionGate | None = None,
         ) -> torch.cuda.CUDAGraph:
             for _ in range(WARMUP_ITERATIONS):
-                body(xt, cond, cfg, active_modes)
+                body(xt, cond, cfg, active_modes, observed=bool(active_modes))
             torch.cuda.synchronize()
             graph = torch.cuda.CUDAGraph()
             if self.capture_stream is None:
@@ -416,8 +454,55 @@ class FlowGraphRunner:
                 stream=self.capture_stream,
                 capture_error_mode="thread_local",
             ):
-                body(xt, cond, cfg, active_modes)
+                body(xt, cond, cfg, active_modes, observed=bool(active_modes))
+            if gate is not None:
+                for probe, (state, condition, scales, expected) in enumerate(probes):
+                    xt.copy_(state)
+                    cond.copy_(condition)
+                    cfg.copy_(scales)
+                    graph.replay()
+                    check_precision(
+                        "replay", xt[:, -self.patch_size :], expected, gate, probe
+                    )
             return graph
+
+        def check_precision(
+            stage: str,
+            actual: torch.Tensor,
+            expected: torch.Tensor,
+            gate: FlowPrecisionGate,
+            probe: int,
+        ) -> None:
+            result = gate.compare(actual, expected)
+            logger.info(
+                f"Flow capture gate: bucket={xt.shape[0]} probe={probe} stage={stage} "
+                f"accepted={result.accepted} byte_exact={result.byte_exact} "
+                f"schema_valid={result.schema_valid} finite={result.finite} "
+                f"max_abs={result.max_abs} rmse={result.rmse} "
+                f"worst_row_nrmse={result.worst_row_nrmse} "
+                f"out_of_bounds={result.out_of_bounds} atol={gate.atol} rtol={gate.rtol}"
+            )
+            if not result.accepted:
+                comparison = "exact" if gate.atol == gate.rtol == 0 else "tolerance"
+                raise TimeCacheUnavailable(
+                    f"Complete Flow {comparison} gate failed for {stage}, probe {probe}"
+                )
+
+        def capture_convolution(
+            active_conv: Conv1dWeightCache,
+            time_modes: tuple[TorchDispatchMode, ...],
+        ) -> tuple[torch.cuda.CUDAGraph, tuple[TorchDispatchMode, ...]]:
+            nonlocal conv_mode
+            conv_mode = active_conv
+            candidate_modes = time_modes + (active_conv,)
+            for probe, (state, condition, scales, expected) in enumerate(probes):
+                actual = body(
+                    state.clone(), condition, scales, candidate_modes, observed=True
+                )
+                check_precision(
+                    "convolution", actual, expected, self.precision_gate, probe
+                )
+            return capture_graph(candidate_modes, self.precision_gate), candidate_modes
 
         with torch.inference_mode():
             if self.optimize and executor is not None:
@@ -434,11 +519,12 @@ class FlowGraphRunner:
                         time_mode = self.time_cache.mode(time_table)
                         modes += (time_mode,)
                     generator = torch.Generator(device=xt.device).manual_seed(41729)
+                    strict_gate = FlowPrecisionGate()
                     for probe in range(3):
                         if probe == 0:
                             probe_xt = torch.zeros_like(xt)
                             probe_cond = torch.zeros_like(cond)
-                            probe_cfg = cfg
+                            probe_cfg = torch.zeros_like(cfg)
                         else:
                             probe_xt = torch.randn(
                                 xt.shape,
@@ -454,13 +540,25 @@ class FlowGraphRunner:
                             )
                             probe_cfg = torch.full_like(cfg, 1.2 if probe == 1 else 2.0)
                         expected = body(probe_xt.clone(), probe_cond, probe_cfg, ())
-                        actual = body(probe_xt.clone(), probe_cond, probe_cfg, modes)
-                        if not finite_byte_equal(actual, expected):
-                            raise TimeCacheUnavailable(
-                                f"Complete Flow exact gate failed for probe {probe}"
+                        probes.append((probe_xt, probe_cond, probe_cfg, expected))
+                        observed = body(
+                            probe_xt.clone(), probe_cond, probe_cfg, (), observed=True
+                        )
+                        check_precision(
+                            "observed", observed, expected, strict_gate, probe
+                        )
+                        if time_mode is not None:
+                            cached_time = body(
+                                probe_xt.clone(),
+                                probe_cond,
+                                probe_cfg,
+                                (time_mode,),
+                                observed=True,
                             )
-                    graph = capture_graph(modes)
-                    self.counters["optimized_captures"] += 1
+                            check_precision(
+                                "time", cached_time, expected, strict_gate, probe
+                            )
+                    graph = capture_graph(modes, strict_gate)
                 except Exception:
                     logger.warning(
                         f"Flow optimization rejected for bucket={xt.shape[0]}; "
@@ -468,7 +566,7 @@ class FlowGraphRunner:
                         exc_info=True,
                     )
                     self.counters["optimization_fallbacks"] += 1
-                    modes, time_table = (), None
+                    modes, time_table, time_mode = (), None, None
                     try:
                         graph = capture_graph(())
                     except Exception:
@@ -476,6 +574,48 @@ class FlowGraphRunner:
                             "Original compiled Flow capture failed", exc_info=True
                         )
                         return None
+                else:
+                    if self.optimize_convolution:
+                        time_modes = modes
+                        try:
+                            if self.conv_cache is None:
+                                self.conv_cache = Conv1dWeightCache(executor.source)
+                            self.conv_cache.validate_weights()
+                            try:
+                                graph, modes = capture_convolution(
+                                    self.conv_cache, time_modes
+                                )
+                            except Exception:
+                                if not (
+                                    self.dit_dtype is torch.bfloat16
+                                    and xt.device.type == "cuda"
+                                    and 2 * xt.shape[0]
+                                    == CONTROLLED_CONV_INPUT_SHAPE[0]
+                                    and xt.shape[1] == CONTROLLED_CONV_INPUT_SHAPE[-1]
+                                    and torch.cuda.get_device_capability(xt.device)
+                                    == (12, 0)
+                                ):
+                                    raise
+                                logger.info(
+                                    f"Generic convolution rejected for bucket={xt.shape[0]}; "
+                                    "trying the controlled convolution plan"
+                                )
+                                controlled_conv = Conv1dWeightCache(
+                                    executor.source, use_controlled_plan=True
+                                )
+                                graph, modes = capture_convolution(
+                                    controlled_conv, time_modes
+                                )
+                        except Exception:
+                            logger.warning(
+                                f"Flow optimization rejected for bucket={xt.shape[0]}: "
+                                "convolution failed; retaining validated time cache",
+                                exc_info=True,
+                            )
+                            self.counters["optimization_fallbacks"] += 1
+                            modes = time_modes
+                    if modes:
+                        self.counters["optimized_captures"] += 1
             else:
                 try:
                     graph = capture_graph(())

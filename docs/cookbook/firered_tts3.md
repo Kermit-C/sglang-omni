@@ -250,17 +250,40 @@ Only the DiT matmul body lowers to bf16: the Euler state, noise, CFG blend, and 
 
 Compile cost is per process and per batch bucket: the first request(s) that hit a new concurrency shape pay a one-time ~45-85 s torch.compile (~45 s with a warm inductor FX cache, which persists across restarts). Startup warmup pre-compiles the single-request shapes.
 
-### Compiled Flow Time Cache
+### Compiled Flow Caches
 
-The time cache is enabled by default for `flow_mode: compile_fp32` and `compile_bf16` when Flow CUDA graphs are used (`stages.talker.factory.flow_cuda_graph: true`). It caches the original compiled time-branch matrix-multiply outputs for each Euler step and batch bucket. Eager `fp32` / `bf16` modes leave it disabled by default; explicitly setting `FIRERED_TTS3_PRECOMPUTE_TIME=1` with an eager mode is rejected.
+The Flow time and convolution caches are enabled by default for `flow_mode: compile_fp32` and `compile_bf16` when Flow CUDA graphs are used (`stages.talker.factory.flow_cuda_graph: true`). Eager `fp32` / `bf16` modes leave both caches disabled by default. Explicitly enabling either cache with an eager mode is rejected.
 
-To disable the cache before starting the worker:
+| Environment variable | Compiled-mode default | Eager-mode default | Behavior |
+|---|---|---|---|
+| `FIRERED_TTS3_PRECOMPUTE_TIME` | `1` | `0` | Caches the original compiled time-branch matrix-multiply outputs for each Euler step and batch bucket |
+| `FIREREDTTS3_CONV_LAYOUT` | `conv2d_channels_last` | `conv1d` | Caches channels-last convolution weights and replaces external convolution calls inside the original compiled graph |
+
+Disable either cache independently, or both, before starting the worker:
 
 ```bash
 export FIRERED_TTS3_PRECOMPUTE_TIME=0
+export FIREREDTTS3_CONV_LAYOUT=conv1d
 ```
 
-The original DiT graph and its compilation options are retained. Before capture, each bucket must pass finite, same-dtype, byte-for-byte checks against the original compiled Flow, including deterministic nonzero probes. A schema mismatch or failed precision check logs a warning and retries the whole Flow with the original compiled path. Failure of that original path invokes the existing fallback behavior. This gate compares the same batch bucket and dtype; it does not assert equality across different batching schedules or precisions.
+The original DiT graph and its compilation options are retained. Each bucket compares complete Euler Flow outputs before capture and after graph replay on a fixed zero probe and two seeded nonzero probes. The observed compiled backend and the time-only cache must each remain finite and byte-exact against the original compiled Flow. Only the final candidate containing convolution replacements may use numerical tolerances:
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `FIRERED_TTS3_FLOW_ATOL` | `0.001` | Absolute error allowance for convolution-optimized Flow output elements |
+| `FIRERED_TTS3_FLOW_RTOL` | `0.01` | Relative error allowance against the original compiled Flow output |
+
+Every output element must satisfy `abs(candidate - reference) <= atol + rtol * abs(reference)`. Both tolerances must be finite and nonnegative; shape, dtype, device, finite values, cache signatures, and operation coverage remain mandatory. Logs include maximum absolute error, RMSE, worst per-request NRMSE, and the number of elements outside the tolerance. Batch-averaged error is not an acceptance criterion. Set both variables to `0` to restore byte-for-byte convolution checks, including signed zero.
+
+These defaults are conservative numerical screening budgets, not calibrated guarantees of perceptual quality. Capture probes run once per bucket, rather than comparing every served request against a second model. A schema mismatch or failed check retries the whole Flow with the original compiled path. Failure of that original path invokes the existing fallback behavior. Compare the same batch shape and dtype when qualifying a change; equality across different batching schedules or precisions is not required by this gate.
+
+Before accepting a non-exact optimization, use fixed-input Flow cases and free-running synthesis with the same seeds and execution shapes. Require identical generated patch counts, PCM sample counts, and normal termination reasons; do not force patch counts or truncate audio to match. Assess content and audio quality separately on held-out utterances, including omissions, repetitions, cut-off tails, noise, and voice changes. Waveform RMSE or correlation alone cannot establish quality. Streaming PCM comparisons also require the same vocoder batch and chunk shapes; use `stages.vocoder.factory.stream_batching: false` for isolated precision qualification, and retain normal batching for performance measurements. The time-cache collection/copy checks remain byte-exact regardless of convolution tolerance.
+
+All Flow buckets first try ordinary PyTorch/cuDNN channels-last convolution with prepacked weights, including the BF16 B4 bucket and padded B3 requests. This path does not require cuDNN frontend or a specific GPU architecture. It must pass the complete Flow precision checks and actual CUDA graph replay before replacing the validated time-only graph.
+
+The BF16 B4 bucket doubles to eight rows for CFG. If the ordinary path fails validation on SM120, its convolution with input `[8,1024,1,12]` and weight `[1024,1024,1,3]` can retry a controlled cuDNN execution plan. This plan retains the original channels-first engine and reduction settings while reusing channels-last weights, and requires cuDNN 9.20 and frontend 1.28.0. Install the optional frontend with `pip install 'sglang-omni[firered-tts3]'` (or `pip install nvidia-cudnn-frontend==1.28.0` in an existing environment). The retry must pass the same complete Flow and replay checks against the original compiled reference. Missing dependencies, unsupported versions, deterministic execution requests, or retry failures retain the already validated time-only graph. Other architectures continue to use the ordinary convolution path when it passes validation.
+
+Each runner owns its plan and workspace. Calls and graph replays on the same runner must be serialized, as required by its static inputs and shared graph pool; concurrent runners must use separate instances. Graph entries retain their dispatch modes, cached tensors, and execution-plan resources. External cached tensors are registered with each replay stream so their allocations remain valid until queued execution finishes.
 
 Load weights and finish dtype/device placement before constructing the Flow executor and its caches. The worker rejects weight-update requests after Flow execution is initialized; restart the worker to load different weights. Direct mutation of model parameters or modules is unsupported. Capture-time weight checks catch supported mismatches, but graph replay does not scan weights and these checks do not provide hot-update support. Each graph entry owns the time table built for its model, dtype/device, CFG batch shape, and time schedule; graph eviction releases the table when its last owner is gone.
 
