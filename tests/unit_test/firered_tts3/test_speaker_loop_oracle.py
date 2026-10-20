@@ -205,6 +205,7 @@ class SpeakerSidePath:
 
 def make_runner(model) -> FireRedTTS3ModelRunner:
     runner = object.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.model = model
     runner.t_span_cache = {}
     return runner

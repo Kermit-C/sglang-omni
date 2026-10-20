@@ -37,6 +37,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         flow_cuda_graph_capture_sizes: list[int] | None = None,
         flow_cuda_graph_max_graphs: int = 8,
         flow_batching: bool = True,
+        control_token_fastpath: bool = True,
+        skip_min_patch_stop: bool = True,
         flow_mode: FlowMode = "compile_bf16",
         warmup_on_init: bool = True,
         # One-step-lookahead decode loop (framework event_loop_async_decode):
@@ -70,6 +72,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         # bucket hit); c>=2 drift is the bounded cross-batch GEMM tiling
         # envelope.
         self.flow_batching = bool(flow_batching)
+        self.control_token_fastpath = bool(control_token_fastpath)
+        self.skip_min_patch_stop = bool(skip_min_patch_stop)
         # The DiT execution stack inside the flow loop (see
         # flow_graph.prepare_flow_dit). compile_bf16 is the measured
         # throughput default (L20 Base c=1 RTF 0.353 -> 0.223,
@@ -322,6 +326,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
             output_proc,
             flow_graphs=self._flow_graphs,
             flow_batching=self.flow_batching,
+            control_token_fastpath=self.control_token_fastpath,
+            skip_min_patch_stop=self.skip_min_patch_stop,
         )
         return self._model_runner
 

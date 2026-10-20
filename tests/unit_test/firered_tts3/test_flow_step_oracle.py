@@ -213,6 +213,7 @@ def test_flow_step_matches_reference_loop(
     )
 
     runner = object.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.model = FakeModel(config, device)
     runner.t_span_cache = {}
     data = SimpleNamespace(
@@ -254,6 +255,7 @@ def test_flow_step_stop_branch_and_min_patches(device) -> None:
     config = load_checkpoint_hf_config(str(BASE_CHECKPOINT))
     assert config is not None
     runner = object.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.model = FakeModel(config, device)
     runner.t_span_cache = {}
 

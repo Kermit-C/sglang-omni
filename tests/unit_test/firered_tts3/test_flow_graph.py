@@ -291,6 +291,7 @@ def test_flow_step_graph_matches_eager(device) -> None:
         )
 
     runner = object.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.model = model
     runner.t_span_cache = {}
     eager_data = make_data()

@@ -10,8 +10,10 @@ behavior). <|eot|> must never terminate the request.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from sglang_omni.models.firered_tts3.model_runner import (
@@ -21,6 +23,7 @@ from sglang_omni.models.firered_tts3.model_runner import (
     TEXT_MODE_SOSP,
     TEXT_MODE_TEXT,
     FireRedTTS3ModelRunner,
+    FlowRow,
 )
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.firered_tts3.prompt_utils import (
@@ -32,10 +35,12 @@ from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     FireRedTTS3SGLangRequestData,
 )
+from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 
 
 def make_runner() -> FireRedTTS3ModelRunner:
     runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.active_requests = {}
     runner.t_span_cache = {}
     runner.flow_calls = 0
@@ -204,3 +209,223 @@ def test_audio_hidden_offset_matches_layout() -> None:
     # Plain audio-mode requests (Base / Instruct tts) have no offset.
     plain = FireRedTTS3SGLangRequestData(state=FireRedTTS3State(task_type="tts"))
     assert runner.audio_hidden_offset(plain) == 0
+
+
+@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("prefill", [False, True])
+def test_speaker_known_ids_survive_finalize(batch_size: int, prefill: bool) -> None:
+    runner = make_runner()
+    runner.output_processor = SGLangOutputProcessor()
+    requests = []
+    for index in range(batch_size):
+        request = make_request("tts")
+        request.request_id = f"speaker-{index}"
+        request.data.state.variant = "speaker"
+        request.data.text_ar_mode = TEXT_MODE_AUDIO
+        request.data.flow_state = SimpleNamespace(patch_count=0)
+        request.data.req = SimpleNamespace(extend_range=SimpleNamespace(length=1))
+        requests.append(request)
+    result = make_result([123] * batch_size)
+    result.can_run_cuda_graph = False
+    if prefill:
+        runner.post_prefill(
+            result, None, SimpleNamespace(is_prefill_only=False), requests
+        )
+    else:
+        runner.post_decode(result, None, None, requests)
+    assert result.next_token_ids.tolist() == [CONTROL_TOKEN_ID] * batch_size
+    result.next_token_ids.fill_(123)
+    output = runner.finalize(result, None, None, SimpleNamespace(requests=requests))
+    assert output.host_token_ids.device.type == "cpu"
+    assert output.host_token_ids.tolist() == [CONTROL_TOKEN_ID] * batch_size
+    assert [output.outputs[r.request_id].data for r in requests] == [
+        CONTROL_TOKEN_ID
+    ] * batch_size
+    assert all(r.data.generation_steps == 1 for r in requests)
+
+
+@pytest.mark.parametrize("speaker_first", [False, True])
+@pytest.mark.parametrize("sampled", [CONTROL_TOKEN_ID, 123, TEXT_EOT_ID])
+@pytest.mark.parametrize("prefill", [False, True])
+def test_mixed_speaker_and_text_batch_preserves_sampled_output(
+    speaker_first: bool, sampled: int, prefill: bool
+) -> None:
+    runner = make_runner()
+    runner.output_processor = SGLangOutputProcessor()
+    speaker, text = make_request("tts"), make_request()
+    speaker.request_id, text.request_id = "speaker", "text"
+    speaker.data.state.variant = "speaker"
+    speaker.data.text_ar_mode = TEXT_MODE_AUDIO
+    speaker.data.flow_state = SimpleNamespace(patch_count=0)
+    text.data.state.variant = "instruct"
+    requests = [speaker, text] if speaker_first else [text, speaker]
+    for request in requests:
+        request.data.req = SimpleNamespace(extend_range=SimpleNamespace(length=1))
+    result = make_result([sampled, sampled])
+    result.can_run_cuda_graph = False
+    if prefill:
+        runner.post_prefill(
+            result, None, SimpleNamespace(is_prefill_only=False), requests
+        )
+    else:
+        runner.post_decode(result, None, None, requests)
+    output = runner.finalize(result, None, None, SimpleNamespace(requests=requests))
+    assert output.outputs["speaker"].data == CONTROL_TOKEN_ID
+    assert output.outputs["text"].data == sampled
+    assert output.host_token_ids is None
+    assert text.data.text_token_ids == ([] if sampled == TEXT_EOT_ID else [sampled])
+    assert text.data.eot_sampled is (sampled == TEXT_EOT_ID)
+    assert runner.flow_calls == 1
+    assert all(request.data.generation_steps == 1 for request in requests)
+
+
+@pytest.mark.parametrize(
+    "enabled,async_enabled,variant,dual_stream,mode,ids",
+    [
+        (False, False, "speaker", False, TEXT_MODE_AUDIO, [0]),
+        (True, True, "speaker", False, TEXT_MODE_AUDIO, [0]),
+        (True, False, "base", False, TEXT_MODE_AUDIO, [0]),
+        (True, False, "instruct", False, TEXT_MODE_AUDIO, [0]),
+        (True, False, "speaker", True, TEXT_MODE_AUDIO, [0]),
+        (True, False, "speaker", False, TEXT_MODE_TEXT, [0]),
+        (True, False, "speaker", False, TEXT_MODE_AUDIO, [123]),
+    ],
+)
+def test_control_fastpath_preserves_other_token_paths(
+    enabled: bool,
+    async_enabled: bool,
+    variant: str,
+    dual_stream: bool,
+    mode: str,
+    ids: list[int],
+) -> None:
+    runner = make_runner()
+    runner.control_token_fastpath = enabled
+    runner._async_enabled = async_enabled
+    request = make_request("tts")
+    request.data.state.variant = variant
+    request.data.dual_stream = dual_stream
+    request.data.text_ar_mode = mode
+    device_ids, host_ids = runner.make_next_token_ids(
+        ids, torch.device("cpu"), [request]
+    )
+    assert device_ids.tolist() == ids
+    assert host_ids is None
+
+
+@pytest.mark.parametrize("skip", [None, False, True])
+@pytest.mark.parametrize(
+    "variant,dual_stream,async_enabled,min_patches,patch_count,skip_eligible",
+    [
+        ("speaker", False, False, 0, 0, False),
+        ("speaker", False, False, 6, 5, True),
+        ("speaker", False, False, 6, 6, False),
+        ("speaker", False, False, 6, 7, False),
+        ("speaker", False, True, 6, 5, False),
+        ("speaker", True, False, 6, 5, False),
+        ("base", False, False, 6, 5, False),
+        ("instruct", False, False, 6, 5, False),
+    ],
+)
+@pytest.mark.parametrize("logit", [-2.0, 0.0, 2.0])
+def test_min_patch_stop_boundary_is_unchanged(
+    skip: bool | None,
+    variant: str,
+    dual_stream: bool,
+    async_enabled: bool,
+    min_patches: int,
+    patch_count: int,
+    skip_eligible: bool,
+    logit: float,
+) -> None:
+    runner = make_runner()
+    if skip is not None:
+        runner.skip_min_patch_stop = skip
+    runner._async_enabled = async_enabled
+    request = make_request("tts")
+    data = request.data
+    data.state.variant = variant
+    data.dual_stream = dual_stream
+    data.state.min_patches = min_patches
+    data.state.stop_threshold = 0.5
+    data.text_ar_mode = TEXT_MODE_AUDIO
+    data.flow_state = SimpleNamespace(patch_count=patch_count)
+    data.probe = SimpleNamespace(segment=lambda name: nullcontext())
+    calls = []
+
+    def stop_head(hidden: torch.Tensor) -> torch.Tensor:
+        calls.append(hidden)
+        return hidden.new_full((1, 1, 1), logit)
+
+    runner.model = SimpleNamespace(stop_head=stop_head)
+    assert runner.stop_predicted(data, torch.zeros(1, 8)) == (
+        patch_count >= min_patches and logit >= 0
+    )
+    assert len(calls) == (0 if skip is not False and skip_eligible else 1)
+
+
+@pytest.mark.parametrize("control_token_fastpath", [False, True])
+@pytest.mark.parametrize("skip_min_patch_stop", [False, True])
+def test_speaker_control_flags_preserve_independent_request_stops(
+    control_token_fastpath: bool, skip_min_patch_stop: bool
+) -> None:
+    runner = make_runner()
+    del runner.flow_step
+    runner.control_token_fastpath = control_token_fastpath
+    runner.skip_min_patch_stop = skip_min_patch_stop
+    runner.output_processor = SGLangOutputProcessor()
+    requests = [make_request("tts"), make_request("tts")]
+    for index, request in enumerate(requests):
+        request.request_id = f"speaker-{index}"
+        request.data.state.variant = "speaker"
+        request.data.state.min_patches = 6
+        request.data.text_ar_mode = TEXT_MODE_AUDIO
+        request.data.flow_state = SimpleNamespace(patch_count=5 + index)
+        request.data.probe = SimpleNamespace(segment=lambda name: nullcontext())
+        request.data.req = SimpleNamespace(finished_reason=None)
+    stop_calls: list[torch.Tensor] = []
+    emitted: list[FireRedTTS3SGLangRequestData] = []
+
+    def stop_head(hidden: torch.Tensor) -> torch.Tensor:
+        stop_calls.append(hidden)
+        return hidden.new_full((1, 1, 1), 2.0)
+
+    def emit_patch(
+        data: FireRedTTS3SGLangRequestData,
+        hidden: torch.Tensor,
+        flow_rows: list[FlowRow] | None = None,
+    ) -> None:
+        data.flow_state.patch_count += 1
+        emitted.append(data)
+
+    runner.model = SimpleNamespace(stop_head=stop_head)
+    runner.run_flow = emit_patch
+    for active in (requests, requests[:1]):
+        result = make_result([123] * len(active))
+        result.can_run_cuda_graph = False
+        runner.post_decode(result, None, None, active)
+        output = runner.finalize(result, None, None, SimpleNamespace(requests=active))
+        assert [output.outputs[r.request_id].data for r in active] == [
+            CONTROL_TOKEN_ID
+        ] * len(active)
+        assert (output.host_token_ids is not None) is control_token_fastpath
+        assert requests[1].data.req.finished_reason is not None
+        assert (requests[0].data.req.finished_reason is not None) is (len(active) == 1)
+    assert emitted == [requests[0].data]
+    assert [request.data.flow_state.patch_count for request in requests] == [6, 6]
+    assert [request.data.generation_steps for request in requests] == [2, 1]
+    assert len(stop_calls) == (2 if skip_min_patch_stop else 3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_control_token_device_snapshots_are_independent() -> None:
+    runner = make_runner()
+    request = make_request("tts")
+    request.data.state.variant = "speaker"
+    request.data.text_ar_mode = TEXT_MODE_AUDIO
+    first, host = runner.make_next_token_ids([0], torch.device("cuda"), [request])
+    second, next_host = runner.make_next_token_ids([0], first.device, [request])
+    second.fill_(123)
+    assert first.is_cuda and host.device.type == "cpu"
+    assert first.tolist() == [0]
+    assert host.tolist() == next_host.tolist() == [0]

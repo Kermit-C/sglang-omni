@@ -36,6 +36,7 @@ def make_runner(*, stop_after: int | None = None) -> FireRedTTS3ModelRunner:
     """Runner with the side path stubbed: run_flow records (hidden, count),
     stop_predicted fires once patch_count reaches stop_after."""
     runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.active_requests = {}
     runner.t_span_cache = {}
     runner.flow_calls: list[tuple[int, float]] = []
@@ -287,6 +288,7 @@ def make_batching_runner() -> FireRedTTS3ModelRunner:
     prepare_flow_row tags the row with its request, run_flow_rows records
     each flushed batch. stop_predicted never fires."""
     runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
+    runner._async_enabled = False
     runner.active_requests = {}
     runner.t_span_cache = {}
     runner.flow_batching = True

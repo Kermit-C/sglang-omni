@@ -250,7 +250,7 @@ Only the DiT matmul body lowers to bf16: the Euler state, noise, CFG blend, and 
 
 Compile cost is per process and per batch bucket: the first request(s) that hit a new concurrency shape pay a one-time ~45-85 s torch.compile (~45 s with a warm inductor FX cache, which persists across restarts). Startup warmup pre-compiles the single-request shapes.
 
-### Compiled Flow Caches
+### Compiled Flow Caches and Speaker Controls
 
 The Flow time and convolution caches are enabled by default for `flow_mode: compile_fp32` and `compile_bf16` when Flow CUDA graphs are used (`stages.talker.factory.flow_cuda_graph: true`). Eager `fp32` / `bf16` modes leave both caches disabled by default. Explicitly enabling either cache with an eager mode is rejected.
 
@@ -286,6 +286,18 @@ The BF16 B4 bucket doubles to eight rows for CFG. If the ordinary path fails val
 Each runner owns its plan and workspace. Calls and graph replays on the same runner must be serialized, as required by its static inputs and shared graph pool; concurrent runners must use separate instances. Graph entries retain their dispatch modes, cached tensors, and execution-plan resources. External cached tensors are registered with each replay stream so their allocations remain valid until queued execution finishes.
 
 Load weights and finish dtype/device placement before constructing the Flow executor and its caches. The worker rejects weight-update requests after Flow execution is initialized; restart the worker to load different weights. Direct mutation of model parameters or modules is unsupported. Capture-time weight checks catch supported mismatches, but graph replay does not scan weights and these checks do not provide hot-update support. Each graph entry owns the time table built for its model, dtype/device, CFG batch shape, and time schedule; graph eviction releases the table when its last owner is gone.
+
+The independent talker factory settings `control_token_fastpath` and `skip_min_patch_stop` both default to `true` and apply only to synchronous Speaker audio steps (prefill and decode) with `dual_stream: false`. The control-token fast path avoids a host/device round trip. The minimum-patch optimization skips the stop head and its scalar synchronization while `patch_count < min_patches`, when stopping is already disallowed; normal stop-head evaluation resumes at the minimum patch count. It does not change `min_patches` or `stop_threshold`. Other decode paths retain their normal behavior.
+
+To disable the Speaker controls, merge the following values into the deployment config. Each can be disabled independently of the other control and the Flow caches:
+
+```yaml
+stages:
+  talker:
+    factory:
+      control_token_fastpath: false
+      skip_min_patch_stop: false
+```
 
 ### Performance
 

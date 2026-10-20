@@ -79,6 +79,7 @@ from sglang_omni.models.firered_tts3.request_builders import (
     FireRedTTS3SGLangRequestData,
 )
 from sglang_omni.sampling.seed import derive_sampling_seed
+from sglang_omni.scheduling.types import SchedulerRequest
 
 # Text-AR machine stages (the reference's generate() mapped onto engine
 # steps): TEXT samples; FINALIZE feeds embed(eot-or-last-token) without
@@ -135,6 +136,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
     # resolve the flow-graph probe to disabled and the flow path to serial.
     flow_graphs: FlowGraphRunner | None = None
     flow_batching: bool = False
+    control_token_fastpath: bool = True
+    skip_min_patch_stop: bool = True
     prefill_launch_at: float | None = None
 
     def __init__(
@@ -144,6 +147,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         *,
         flow_graphs: FlowGraphRunner | None = None,
         flow_batching: bool = False,
+        control_token_fastpath: bool = True,
+        skip_min_patch_stop: bool = True,
     ) -> None:
         super().__init__(tp_worker, output_processor)
         self.active_requests: dict[str, FireRedTTS3SGLangRequestData] = {}
@@ -154,6 +159,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         if flow_graphs is not None:
             self.flow_graphs = flow_graphs
         self.flow_batching = flow_batching
+        self.control_token_fastpath = control_token_fastpath
+        self.skip_min_patch_stop = skip_min_patch_stop
 
     def t_span(self, n_timesteps: int, device: torch.device) -> torch.Tensor:
         span = self.t_span_cache.get(n_timesteps)
@@ -635,9 +642,43 @@ class FireRedTTS3ModelRunner(ModelRunner):
             self.run_flow_rows(flow_rows)
         if offset != hidden.size(0):
             raise RuntimeError("FireRedTTS3 prefill hidden rows do not match requests")
-        result.next_token_ids = torch.tensor(
-            next_token_ids, dtype=torch.long, device=hidden.device
+        result.next_token_ids, host_token_ids = self.make_next_token_ids(
+            next_token_ids, hidden.device, requests
         )
+        if host_token_ids is not None:
+            self.stage_token_ids(result, host_token_ids)
+
+    def is_sync_speaker_audio(self, data: FireRedTTS3SGLangRequestData) -> bool:
+        return (
+            not self._async_enabled
+            and data.state.variant == "speaker"
+            and not data.dual_stream
+            and data.text_ar_mode == TEXT_MODE_AUDIO
+        )
+
+    def make_next_token_ids(
+        self,
+        next_token_ids: list[int],
+        device: torch.device,
+        requests: list[SchedulerRequest],
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Separate known reporting IDs from the device's control-token input."""
+        if (
+            self.control_token_fastpath
+            and all(self.is_sync_speaker_audio(request.data) for request in requests)
+            and all(token == CONTROL_TOKEN_ID for token in next_token_ids)
+        ):
+            return (
+                torch.full(
+                    (len(next_token_ids),),
+                    CONTROL_TOKEN_ID,
+                    dtype=torch.long,
+                    device=device,
+                ),
+                torch.tensor(next_token_ids, dtype=torch.long, device="cpu"),
+            )
+        else:
+            return torch.tensor(next_token_ids, dtype=torch.long, device=device), None
 
     def audio_hidden_offset(self, data: FireRedTTS3SGLangRequestData) -> int:
         """Generated-region rows before the patch-driving hiddens. Reached
@@ -766,9 +807,11 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 next_token_ids.append(CONTROL_TOKEN_ID)
         if flow_rows:
             self.run_flow_rows(flow_rows)
-        result.next_token_ids = torch.tensor(
-            next_token_ids, dtype=torch.long, device=hidden.device
+        result.next_token_ids, host_token_ids = self.make_next_token_ids(
+            next_token_ids, hidden.device, requests
         )
+        if host_token_ids is not None:
+            self.stage_token_ids(result, host_token_ids)
 
     def dual_stream_cond_rows(
         self, data: FireRedTTS3SGLangRequestData, hidden_f32: torch.Tensor
@@ -876,6 +919,12 @@ class FireRedTTS3ModelRunner(ModelRunner):
         model = self.model
         flow = data.flow_state
         state = data.state
+        if (
+            self.skip_min_patch_stop
+            and self.is_sync_speaker_audio(data)
+            and flow.patch_count < state.min_patches
+        ):
+            return False
         with torch.inference_mode(), data.probe.segment("stop_head"):
             stop_logits = model.stop_head(hidden_f32[-1:].unsqueeze(0))
             stop_score = float(torch.sigmoid(stop_logits).reshape(-1)[-1].item())
