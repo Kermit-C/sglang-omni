@@ -48,7 +48,12 @@ opt-in) consumes (nt + na) / na engine steps per patch:
   on the request data; the re-prefill rebuilds the flow state from the full
   hidden row and replays the decoded patches through patch_encoder (for
   dual-stream, the interleaved text/patch feed order recorded in
-  output_ids).
+  output_ids). The re-prefill tail is the interrupted step's input; both
+  machines resume its post-work on that hidden. Prefill stop decisions
+  defer to the next decode step so the scheduler releases KV normally.
+  Repeated retractions while that stop is pending replay the excess CONTROL
+  feeds as discardable token embeddings; no more machine post-work runs.
+  Async decode with retraction remains unverified.
 """
 
 from __future__ import annotations
@@ -291,22 +296,30 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 assert prefix_len == 0, "FireRedTTS3 radix prefix reuse is disabled"
                 if data.dual_stream:
                     # output_ids record the interleaved feeds: text tokens as
-                    # themselves, patch feeds as the control token. The patch
-                    # whose flow fired but whose feed was interrupted sits
-                    # between the two counts.
+                    # themselves, patch feeds as the control token, including
+                    # the pending feed. Every flow-firing step returns one
+                    # control token and appends one patch. While a deferred
+                    # stop is pending, each re-prefill returns another control
+                    # token without a patch; the stopped machine emits nothing.
                     patch_feeds = sum(
                         1
                         for token in data.req.output_ids
                         if int(token) == CONTROL_TOKEN_ID
                     )
-                    assert generated == len(data.req.output_ids) and patch_feeds == (
-                        len(data.latent_patches) - int(data.ds_stage == DS_STAGE_PATCH)
+                    excess = patch_feeds - len(data.latent_patches)
+                    assert (
+                        generated == len(data.req.output_ids)
+                        and excess >= 0
+                        and (excess == 0 or data.stop_pending)
                     ), "FireRedTTS3 dual-stream re-prefill history is inconsistent"
                 else:
-                    assert (
-                        generated
-                        == len(data.req.output_ids)
-                        == (len(data.latent_patches) + self.text_output_tokens(data))
+                    excess = (
+                        len(data.req.output_ids)
+                        - self.text_output_tokens(data)
+                        - len(data.latent_patches)
+                    )
+                    assert generated == len(data.req.output_ids) and (
+                        excess >= 0 and (excess == 0 or data.stop_pending)
                     ), "FireRedTTS3 re-prefill history must match generated tokens"
                 rows.append(torch.cat(request_rows, dim=0))
             forward_batch.input_embeds = torch.cat(rows, dim=0)
@@ -374,7 +387,10 @@ class FireRedTTS3ModelRunner(ModelRunner):
         patch_encoder (one row per engine step). Dual-stream requests replay
         the interleaved feed order recorded in output_ids (a CONTROL row
         consumes the next generated patch); when the machine paused at a
-        patch feed, that patch's embedding re-queues as the next feedback."""
+        patch feed, that patch's embedding re-queues as the next feedback.
+        Sync CONTROL entries match latent_patches 1:1 until a deferred stop;
+        later CONTROL feeds replay as discardable token embeddings. Re-queuing
+        is only a fallback for async output_ids lagging one token behind."""
         if data.dual_stream:
             return self.build_dual_stream_replay_rows(model, data, device, embed_dtype)
         text_tokens = self.text_output_tokens(data)
@@ -390,6 +406,14 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     embed_dtype
                 )
             )
+        excess = len(data.req.output_ids) - text_tokens - len(data.latent_patches)
+        if data.stop_pending and excess > 0:
+            # A deferred stop's extra feeds have no patches; their hidden
+            # rows are discarded by post_prefill and the finishing decode.
+            ids = torch.full(
+                (excess,), CONTROL_TOKEN_ID, dtype=torch.long, device=device
+            )
+            rows.append(model.get_input_embeddings()(ids).to(embed_dtype))
         if not rows:
             return None
         return torch.cat(rows, dim=0)
@@ -414,16 +438,24 @@ class FireRedTTS3ModelRunner(ModelRunner):
         for token in output_ids:
             if token == CONTROL_TOKEN_ID:
                 flush_text()
-                assert patch_cursor < len(data.latent_patches), (
-                    "FireRedTTS3 dual-stream replay found more patch feeds "
-                    "than generated patches"
-                )
-                rows.append(
-                    model.patch_encoder(data.latent_patches[patch_cursor])[0].to(
-                        embed_dtype
+                if data.stop_pending and patch_cursor == len(data.latent_patches):
+                    # Stopped requests may accumulate CONTROL feeds across
+                    # retractions; these rows never drive flow or feedback.
+                    ids = torch.tensor(
+                        [CONTROL_TOKEN_ID], dtype=torch.long, device=device
                     )
-                )
-                patch_cursor += 1
+                    rows.append(embed_tokens(ids).to(embed_dtype))
+                else:
+                    assert patch_cursor < len(data.latent_patches), (
+                        "FireRedTTS3 dual-stream replay found more patch feeds "
+                        "than generated patches"
+                    )
+                    rows.append(
+                        model.patch_encoder(data.latent_patches[patch_cursor])[0].to(
+                            embed_dtype
+                        )
+                    )
+                    patch_cursor += 1
             else:
                 text_buffer.append(token)
         flush_text()
@@ -483,11 +515,10 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 if queue:
                     rows.append(queue.popleft())
                 elif data.stop_pending:
-                    # Lookahead overrun row: its stop was decided at the
-                    # previous launch (no patch, no feedback queued) and its
-                    # finish lands at that step's resolve; this extra launch's
-                    # row is discarded, so any in-shape embedding satisfies
-                    # the engine's contract.
+                    # A deferred stop queued no feedback. The next post hook
+                    # discards this row (sync) or leaves it to resolve
+                    # (async), so any in-shape embedding satisfies the
+                    # engine's contract.
                     rows.append(
                         torch.zeros(
                             model.llm_hidden_size,
@@ -593,6 +624,12 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 raise RuntimeError("FireRedTTS3 prefill hidden rows are incomplete")
             offset += length
             hidden_f32 = request_hidden.to(torch.float32)
+            if data.stop_pending:
+                # A previously deferred stop leaves no machine post-work.
+                # Each re-prefill returns an extra CONTROL without a patch;
+                # the next decode resolves the finish and discards its row.
+                next_token_ids.append(CONTROL_TOKEN_ID)
+                continue
             flow = data.flow_state
             if data.text_ar_mode == TEXT_MODE_TEXT:
                 # The prefill tail is the reference's first text sampling
@@ -602,12 +639,16 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 )
                 continue
             if data.dual_stream:
-                # The dual-stream machine starts on the first decode step's
-                # text feed; the prefill tail fires nothing (reference
-                # generate_streaming_noicl: the prefix hidden is unused).
+                if not data.req.output_ids:
+                    # First prefill: the machine starts on the next decode
+                    # step's text feed; the prompt tail fires nothing
+                    # (generate_streaming_noicl leaves the prefix unused).
+                    next_token_ids.append(self.next_text_feed(data))
+                    continue
+                # The re-prefill tail is the interrupted step's input. Rebuild
+                # the earlier cond rows before resuming its post-work; a flow
+                # step appends the tail itself.
                 if flow.patch_count > 0:
-                    # Re-prefill after retraction: rebuild the cond history
-                    # from the interleaved generated-region rows.
                     flow.backbone_cond = torch.cat(
                         [
                             flow.backbone_cond,
@@ -615,13 +656,25 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         ],
                         dim=1,
                     )
-                if data.ds_stage == DS_STAGE_PATCH:
-                    # The patch whose feedback re-queued at replay is the
-                    # next feed.
-                    next_token_ids.append(CONTROL_TOKEN_ID)
-                else:
-                    next_token_ids.append(self.next_text_feed(data))
+                next_token_ids.append(
+                    self.dual_stream_step(
+                        data, hidden_f32[-1:], flow_rows, defer_stop=True
+                    )
+                )
                 continue
+            mode = data.text_ar_mode
+            if mode == TEXT_MODE_FINALIZE:
+                # The interrupted finalize fed embed(EOT/last-token) without
+                # sampling; resume the same transition as run_post_decode.
+                data.text_ar_mode = TEXT_MODE_SOSP
+                next_token_ids.append(AUDIO_SOS_ID)
+                continue
+            if mode == TEXT_MODE_SOSP:
+                data.text_ar_mode = TEXT_MODE_AUDIO_ZERO
+                next_token_ids.append(AUDIO_SOS_ID)
+                continue
+            if mode == TEXT_MODE_AUDIO_ZERO:
+                data.text_ar_mode = TEXT_MODE_AUDIO
             if flow.patch_count > 0:
                 # Re-prefill after retraction: rebuild the cond history from
                 # the full hidden row — the prompt-latent span, then one row
@@ -636,7 +689,9 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     hidden_f32[audio_start:-1].unsqueeze(0),
                 ]
                 flow.backbone_cond = torch.cat(rebuilt, dim=1)
-            self.flow_step(data, hidden_f32, flow_rows)
+            # Prefill skips already-finished requests before KV cleanup;
+            # resolve a stop on the next decode step instead.
+            self.flow_step(data, hidden_f32, flow_rows, defer_stop=True)
             next_token_ids.append(CONTROL_TOKEN_ID)
         if flow_rows:
             self.run_flow_rows(flow_rows)
@@ -767,10 +822,16 @@ class FireRedTTS3ModelRunner(ModelRunner):
         for row, request in enumerate(requests):
             data = request.data
             if data.stop_pending:
-                # Lookahead overrun row: its stop was decided at an earlier
-                # launch and applies at that step's resolve; this extra
-                # launch's row is discarded by the scheduler, so no flow runs.
+                # A stop deferred by prefill or an earlier async launch emits
+                # no more patches. Async resolves in post_decode_resolve;
+                # sync finishes here so decode owns the KV cleanup.
                 next_token_ids.append(CONTROL_TOKEN_ID)
+                if not defer_stop:
+                    data.stop_pending = False
+                    if not data.req.is_retracted and not data.req.finished():
+                        data.req.finished_reason = FINISH_MATCHED_TOKEN(
+                            CONTROL_TOKEN_ID
+                        )
                 continue
             if data.dual_stream:
                 next_token_ids.append(
@@ -902,8 +963,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
 
     @staticmethod
     def mark_stop(data: FireRedTTS3SGLangRequestData, *, defer: bool) -> None:
-        """Record a stop decision. Async launches defer the finish to their
-        resolve (see post_decode_launch); the sync path marks it directly."""
+        """Record a stop decision. Prefill and async launches defer the finish;
+        sync decode marks it directly (async uses post_decode_resolve)."""
         if defer:
             data.stop_pending = True
         else:
