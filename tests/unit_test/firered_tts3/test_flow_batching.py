@@ -21,7 +21,6 @@ Contracts pinned here (driving the real runner post hooks with the real DiT):
 from __future__ import annotations
 
 import collections
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -77,7 +76,7 @@ def make_graphs(model, device, capture_sizes=(1, 2, 4)) -> FlowGraphRunner:
 
 def make_runner(model, device, *, flow_batching: bool, graphs=None):
     runner = object.__new__(FireRedTTS3ModelRunner)
-    runner._async_enabled = False
+    runner.async_enabled = False
     runner.model = model
     runner.t_span_cache = {}
     runner.flow_graphs = graphs

@@ -62,11 +62,15 @@ class ConvBlock(nn.Module):
         """
         if mask is not None:
             x = x * mask
+        else:
+            pass
         x = x.transpose(1, 2)
         x = self.block(x)
         x = x.transpose(1, 2)
         if mask is not None:
             x = x * mask
+        else:
+            pass
         return x
 
 

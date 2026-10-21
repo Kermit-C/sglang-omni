@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import CHECKPOINTS
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
 from sglang_omni.models.firered_tts3.prompt_utils import (
     TEXT_TOKEN_BUDGET,
@@ -18,6 +17,8 @@ from sglang_omni.models.firered_tts3.prompt_utils import (
 from sglang_omni.models.firered_tts3.request_builders import ENGINE_TOKEN_SLACK
 from sglang_omni.models.firered_tts3.stages import preprocess_firered_tts3_payload
 from sglang_omni.proto import OmniRequest, StagePayload
+
+from .conftest import CHECKPOINTS
 
 
 class RecordingTokenizer:

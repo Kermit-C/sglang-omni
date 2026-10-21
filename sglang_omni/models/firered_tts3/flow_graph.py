@@ -74,6 +74,8 @@ FlowMode = Literal["fp32", "compile_fp32", "bf16", "compile_bf16"]
 def flow_dit_dtype(mode: str) -> torch.dtype:
     if mode not in FLOW_MODES:
         raise ValueError(f"unknown flow mode {mode!r}; expected one of {FLOW_MODES}")
+    else:
+        pass
     return torch.bfloat16 if mode.endswith("bf16") else torch.float32
 
 
@@ -87,10 +89,14 @@ def flow_optimizations(mode: FlowMode) -> tuple[bool, bool]:
     )
     if time_cache not in ("0", "1"):
         raise ValueError("FIRERED_TTS3_PRECOMPUTE_TIME must be 0 or 1")
+    else:
+        pass
     if conv_layout not in ("conv1d", "conv2d_channels_last"):
         raise ValueError(
             "FIREREDTTS3_CONV_LAYOUT must be conv1d or conv2d_channels_last"
         )
+    else:
+        pass
     return time_cache == "1", conv_layout == "conv2d_channels_last"
 
 
@@ -120,21 +126,33 @@ def prepare_flow_dit(
     """
     if mode not in FLOW_MODES:
         raise ValueError(f"unknown flow mode {mode!r}; expected one of {FLOW_MODES}")
+    else:
+        pass
     time_cache, conv_cache = flow_optimizations(mode)
     ffn_gemm = flow_ffn_optimization(mode)
     if (time_cache or conv_cache) and not mode.startswith("compile"):
         raise ValueError("Flow time/convolution caches require a compile flow mode")
+    else:
+        pass
     if mode == "fp32":
         return dit, dit
+    else:
+        pass
     if mode.endswith("bf16"):
         dit = copy.deepcopy(dit).to(dtype=torch.bfloat16)
+    else:
+        pass
     if mode.startswith("compile"):
         if time_cache or conv_cache or ffn_gemm:
             return CompiledDiTExecutor(dit), dit
+        else:
+            pass
         return (
             torch.compile(dit, dynamic=False, options={"epilogue_fusion": False}),
             dit,
         )
+    else:
+        pass
     return dit, dit
 
 
@@ -216,22 +234,32 @@ class FlowGraphEntry:
         key = (stream.device.index, stream.cuda_stream)
         if key in self.replay_streams:
             return
+        else:
+            pass
         for tensor in (self.xt, self.cond, self.cfg):
             tensor.record_stream(stream)
         if self.t_span is not None:
             self.t_span.record_stream(stream)
+        else:
+            pass
         if self.time_table is not None:
             for step in self.time_table.steps:
                 for value in step.values():
                     value.output.record_stream(stream)
+        else:
+            pass
         for mode in self.dispatch_modes:
             if isinstance(mode, Conv1dWeightCache):
                 for weight in mode.weights.values():
                     weight.packed.record_stream(stream)
                 if mode.controlled_plan is not None:
                     mode.controlled_plan.workspace.record_stream(stream)
+                else:
+                    pass
             elif isinstance(mode, FfnGemmMode):
                 mode.record_stream(stream)
+            else:
+                pass
         # note (Codex): replay bypasses Python dispatch, so retain each registered stream.
         self.replay_streams[key] = stream
 
@@ -289,6 +317,8 @@ class FlowGraphRunner:
         )
         if self.optimize and not mode.startswith("compile"):
             raise ValueError("Flow time/convolution caches require a compile flow mode")
+        else:
+            pass
         if isinstance(dit, CompiledDiTExecutor):
             self.executor = dit
         elif self.optimize:
@@ -361,11 +391,15 @@ class FlowGraphRunner:
         ):
             self.counters["eager"] += 1
             return None
+        else:
+            pass
         bsz = hist_latents.shape[0]
         cfgs = cfgs.reshape(bsz, 1, 1)
         target = bsz
         if self.capture_sizes:
             target = next((s for s in self.capture_sizes if s >= bsz), bsz)
+        else:
+            pass
         if target != bsz:
             pad = target - bsz
             hist_latents = self.pad_batch(hist_latents, pad)
@@ -373,6 +407,8 @@ class FlowGraphRunner:
             cond = self.pad_batch(cond, pad)
             cfgs = self.pad_batch(cfgs, pad)
             self.counters["padded"] += 1
+        else:
+            pass
         key = (hist_latents.device.index, target, tuple(cond.shape))
         entry = self.cache.get(key)
         if entry is None:
@@ -388,10 +424,14 @@ class FlowGraphRunner:
                 )
                 self.dit = self.dit_fallback
                 entry = self.capture(hist_latents, x0, cond)
+            else:
+                pass
             if entry is None:
                 self.enabled = False
                 self.counters["eager"] += 1
                 return None
+            else:
+                pass
             self.counters["captures"] += 1
             self.cache[key] = entry
             while len(self.cache) > self.max_graphs:
@@ -406,6 +446,8 @@ class FlowGraphRunner:
         entry.cfg.copy_(cfgs)
         if entry.dispatch_modes:
             entry.record_replay_stream(torch.cuda.current_stream(entry.xt.device))
+        else:
+            pass
         entry.graph.replay()
         # The tail aliases the static buffer the next replay overwrites.
         return entry.xt[:, -self.patch_size :][:bsz].clone()
@@ -467,6 +509,10 @@ class FlowGraphRunner:
                     raise TimeCacheUnavailable(
                         "Compiled convolution schema was not fully handled"
                     )
+                else:
+                    pass
+            else:
+                pass
             if active_ffn is not None:
                 expected = (
                     active_ffn.expected_hits(2 * state.shape[0] * state.shape[1])
@@ -474,6 +520,10 @@ class FlowGraphRunner:
                 )
                 if expected == 0 or active_ffn.hits - ffn_hits != expected:
                     raise RuntimeError("Compiled DiT GEMM schema was not fully handled")
+                else:
+                    pass
+            else:
+                pass
             return result
 
         probes: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
@@ -488,6 +538,8 @@ class FlowGraphRunner:
             graph = torch.cuda.CUDAGraph()
             if self.capture_stream is None:
                 self.capture_stream = torch.cuda.Stream(device=xt.device)
+            else:
+                pass
             with torch.cuda.graph(
                 graph,
                 pool=self.graph_pool,
@@ -504,6 +556,8 @@ class FlowGraphRunner:
                     check_precision(
                         "replay", xt[:, -self.patch_size :], expected, gate, probe
                     )
+            else:
+                pass
             return graph
 
         def check_precision(
@@ -527,6 +581,8 @@ class FlowGraphRunner:
                 raise TimeCacheUnavailable(
                     f"Complete Flow {comparison} gate failed for {stage}, probe {probe}"
                 )
+            else:
+                pass
 
         def capture_convolution(
             active_conv: Conv1dWeightCache,
@@ -550,6 +606,8 @@ class FlowGraphRunner:
                     if self.precompute_time_conditions:
                         if self.time_cache is None:
                             self.time_cache = TimeConditionCache(executor.source)
+                        else:
+                            pass
                         x_in = torch.cat([xt, cond], dim=2)
                         x_uncond = torch.cat([xt, cond * 0], dim=2)
                         example = torch.cat([x_in, x_uncond], dim=0).to(self.dit_dtype)
@@ -558,6 +616,8 @@ class FlowGraphRunner:
                         )
                         time_mode = self.time_cache.mode(time_table)
                         modes += (time_mode,)
+                    else:
+                        pass
                     generator = torch.Generator(device=xt.device).manual_seed(41729)
                     strict_gate = FlowPrecisionGate()
                     for probe in range(3):
@@ -598,6 +658,8 @@ class FlowGraphRunner:
                             check_precision(
                                 "time", cached_time, expected, strict_gate, probe
                             )
+                        else:
+                            pass
                     graph = capture_graph(modes, strict_gate)
                 except Exception:
                     logger.warning(
@@ -620,6 +682,8 @@ class FlowGraphRunner:
                         try:
                             if self.conv_cache is None:
                                 self.conv_cache = Conv1dWeightCache(executor.source)
+                            else:
+                                pass
                             self.conv_cache.validate_weights()
                             try:
                                 graph, modes = capture_convolution(
@@ -636,6 +700,8 @@ class FlowGraphRunner:
                                     == (12, 0)
                                 ):
                                     raise
+                                else:
+                                    pass
                                 logger.info(
                                     f"Generic convolution rejected for bucket={xt.shape[0]}; "
                                     "trying the controlled convolution plan"
@@ -654,6 +720,8 @@ class FlowGraphRunner:
                             )
                             self.counters["optimization_fallbacks"] += 1
                             modes = time_modes
+                    else:
+                        pass
                     if (
                         self.optimize_ffn
                         and conv_mode is not None
@@ -665,6 +733,8 @@ class FlowGraphRunner:
                         try:
                             if self.ffn_mode is None:
                                 self.ffn_mode = FfnGemmMode(executor.source)
+                            else:
+                                pass
                             ffn_mode = self.ffn_mode
                             rows = 2 * xt.shape[0] * xt.shape[1]
                             if (
@@ -675,8 +745,12 @@ class FlowGraphRunner:
                                 ffn_mode.prepare_packed(
                                     executor.compile_backend, xt.device
                                 )
+                            else:
+                                pass
                             if not ffn_mode.supports(rows):
                                 raise RuntimeError(ffn_mode.reason)
+                            else:
+                                pass
                             ffn_mode.validate_weights()
                             modes = (*base_modes, ffn_mode)
                             for probe, (
@@ -711,6 +785,8 @@ class FlowGraphRunner:
                                         strict_gate,
                                         probe,
                                     )
+                                else:
+                                    pass
                                 check_precision(
                                     "ffn",
                                     actual,
@@ -736,8 +812,12 @@ class FlowGraphRunner:
                                     exc_info=True,
                                 )
                                 return None
+                    else:
+                        pass
                     if modes:
                         self.counters["optimized_captures"] += 1
+                    else:
+                        pass
             else:
                 try:
                     graph = capture_graph(())

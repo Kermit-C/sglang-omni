@@ -13,9 +13,9 @@ streaming plus the BatchVocoder full-payload path.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import torch
+from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.models.firered_tts3.flow_graph import FlowMode
 from sglang_omni.models.firered_tts3.hf_config import (
@@ -48,6 +48,7 @@ from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.scheduling.streaming_vocoder import StreamingVocoderBase
 from sglang_omni.utils.audio_payload import audio_data_uri_from_reference
 from sglang_omni.utils.checkpoint import resolve_checkpoint
+from sglang_omni.utils.json import JsonValue
 
 logger = logging.getLogger(__name__)
 
@@ -122,12 +123,14 @@ ACOUSTIC_ATTRIBUTES = ("Speed", "Pitch", "Volume")
 
 
 def resolve_request_reference(
-    inputs: dict[str, Any], tts_params: dict[str, Any]
-) -> tuple[str | None, Any]:
+    inputs: dict[str, JsonValue], tts_params: dict[str, JsonValue]
+) -> tuple[str | None, JsonValue]:
     """The single reference clip (path/data URI) and its transcript, if any."""
     references = inputs.get("references")
     if isinstance(references, list) and len(references) > 1:
         raise ValueError("FireRedTTS3 accepts at most one reference audio")
+    else:
+        pass
     reference = (
         references[0]
         if isinstance(references, list)
@@ -151,7 +154,7 @@ def resolve_request_reference(
     return audio, text
 
 
-def normalize_instruct_task(value: Any) -> str:
+def normalize_instruct_task(value: JsonValue) -> str:
     task = (
         INSTRUCT_TASK_ALIASES.get(
             str(value).strip().replace("_", "").replace("-", "").lower()
@@ -162,10 +165,14 @@ def normalize_instruct_task(value: Any) -> str:
     if task is None:
         if value is None:
             return "tts"
+        else:
+            pass
         raise ValueError(
             f"unsupported FireRedTTS3-Instruct task_type {value!r}; expected one "
             "of VoiceDesign / SemanticEdit / AcousticEdit (or ref_audio tts)"
         )
+    else:
+        pass
     return task
 
 
@@ -179,12 +186,14 @@ def count_audio_patches(audio_path: str, *, cap_seconds: float | None) -> int:
     wav, sr = load_audio(audio_path)
     if cap_seconds is not None:
         wav = wav[..., : int(sr * cap_seconds)]
+    else:
+        pass
     _, patches = count_latent_patches(wav, sr)
     return patches
 
 
 def resolve_text_sampling(
-    task: str, params: dict[str, Any], tts_params: dict[str, Any]
+    task: str, params: dict[str, JsonValue], tts_params: dict[str, JsonValue]
 ) -> tuple[float, float | None, int | None]:
     """Text-phase sampling: the reference defaults per task, with explicit
     client generation fields (tracked by the serving layer) taking precedence.
@@ -196,22 +205,30 @@ def resolve_text_sampling(
     explicit = set(tts_params.get("explicit_generation_params") or [])
     if "temperature" in explicit:
         temperature = float(params["temperature"])
+    else:
+        pass
     if "top_p" in explicit:
         top_p = float(params["top_p"])
+    else:
+        pass
     if "top_k" in explicit:
         top_k = int(params["top_k"])
+    else:
+        pass
     return temperature, top_p, top_k
 
 
 def resolve_acoustic_instruction(
     instructions: str | None,
-    tts_params: dict[str, Any],
-    preprocessing_params: dict[str, Any],
+    tts_params: dict[str, JsonValue],
+    preprocessing_params: dict[str, JsonValue],
 ) -> str:
     """Acoustic edits take the fixed trained templates; an explicit
     instructions field overrides as a raw template (reference behavior)."""
     if instructions is not None and instructions.strip():
         return instructions.strip()
+    else:
+        pass
     attribute = str(
         first_not_none(
             preprocessing_params.get("acoustic_attribute"),
@@ -225,6 +242,8 @@ def resolve_acoustic_instruction(
             f"acoustic_attribute must be one of {ACOUSTIC_ATTRIBUTES}, "
             f"got {attribute!r}"
         )
+    else:
+        pass
     value = first_not_none(
         preprocessing_params.get("acoustic_value"),
         tts_params.get("acoustic_value"),
@@ -234,25 +253,31 @@ def resolve_acoustic_instruction(
     return compose_acoustic_instruction(attribute, float(value))
 
 
-def first_not_none(*values: Any, default: Any = None) -> Any:
+def first_not_none(*values: JsonValue, default: JsonValue = None) -> JsonValue:
     return next((value for value in values if value is not None), default)
 
 
-def as_dict(value: Any) -> dict[str, Any]:
+def as_dict(value: JsonValue) -> dict[str, JsonValue]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def request_inputs(value: Any) -> dict[str, Any]:
+def request_inputs(value: JsonValue) -> dict[str, JsonValue]:
     if isinstance(value, str):
         return {"text": value}
+    else:
+        pass
     return as_dict(value)
 
 
-def reference_path(value: Any) -> str | None:
+def reference_path(value: JsonValue) -> str | None:
     if value is None:
         return None
+    else:
+        pass
     if isinstance(value, str):
         return value
+    else:
+        pass
     if isinstance(value, dict):
         path = (
             value.get("audio_path")
@@ -260,13 +285,15 @@ def reference_path(value: Any) -> str | None:
             or audio_data_uri_from_reference(value)
         )
         return str(path) if path else None
+    else:
+        pass
     raise TypeError("FireRedTTS3 reference audio must be a path or data URI")
 
 
 def preprocess_firered_tts3_payload(
     payload: StagePayload,
     *,
-    tokenizer: Any,
+    tokenizer: PreTrainedTokenizerBase,
     config: FireRedTTS3Config,
     n_timesteps: int,
     max_patches: int,
@@ -287,10 +314,12 @@ def preprocess_firered_tts3_payload(
         raise ValueError(
             f"FireRedTTS3 input text must be at most {MAX_TEXT_CHARS} characters"
         )
+    else:
+        pass
 
     generation = dict(config.generation_defaults or {})
 
-    def resolve_number(key: str, fallback: Any) -> Any:
+    def resolve_number(key: str, fallback: int | float) -> JsonValue:
         return first_not_none(
             inputs.get(key),
             tts_params.get(key),
@@ -364,6 +393,8 @@ def preprocess_firered_tts3_payload(
     cfg_default = generation.get("inference_cfg", 2.0)
     if variant == "instruct":
         cfg_default = TASK_CFG.get(state.task_type, cfg_default)
+    else:
+        pass
     state.inference_cfg = float(resolve_number("inference_cfg", cfg_default))
     state.stop_threshold = float(
         resolve_number("stop_threshold", generation.get("stop_threshold", 0.5))
@@ -393,32 +424,44 @@ def engine_token_budget(
                 "FireRedTTS3 dual-stream requests require the checkpoint's "
                 "text_latent_interleave_ratio"
             )
+        else:
+            pass
         return speaker_max_tokens(state.max_patches, interleave_ratio)
+    else:
+        pass
     budget = state.max_patches + ENGINE_TOKEN_SLACK
     if state.task_type in TEXT_PHASE_TASKS:
         budget += TEXT_TOKEN_BUDGET + 2
+    else:
+        pass
     return budget
 
 
 def compose_base_state(
     config: FireRedTTS3Config,
     *,
-    tokenizer: Any,
-    inputs: dict[str, Any],
-    tts_params: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+    inputs: dict[str, JsonValue],
+    tts_params: dict[str, JsonValue],
     text: str,
 ) -> FireRedTTS3State:
     if not text.strip():
         raise ValueError("FireRedTTS3 requires non-empty input text")
+    else:
+        pass
     text = text.strip()
     prompt_audio, prompt_text_value = resolve_request_reference(inputs, tts_params)
     if prompt_audio is None:
         raise ValueError("FireRedTTS3-Base requires a reference audio (voice cloning)")
+    else:
+        pass
     if prompt_text_value is None or not str(prompt_text_value).strip():
         raise ValueError(
             "FireRedTTS3-Base requires the reference audio transcript "
             "(ref_text / references[0].text)"
         )
+    else:
+        pass
     prompt_text = str(prompt_text_value).strip()
 
     language = str(
@@ -431,6 +474,8 @@ def compose_base_state(
             f"unsupported FireRedTTS3 language {language!r}; expected one of "
             "MULTI_LANG_TAGS/MULTI_DIALECT_TAGS"
         )
+    else:
+        pass
 
     return FireRedTTS3State(
         sample_rate=int(config.audio_sample_rate),
@@ -449,11 +494,11 @@ def compose_base_state(
 def compose_speaker_state(
     config: FireRedTTS3Config,
     *,
-    tokenizer: Any,
-    inputs: dict[str, Any],
-    params: dict[str, Any],
-    tts_params: dict[str, Any],
-    preprocessing_params: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+    inputs: dict[str, JsonValue],
+    params: dict[str, JsonValue],
+    tts_params: dict[str, JsonValue],
+    preprocessing_params: dict[str, JsonValue],
     text: str,
 ) -> FireRedTTS3State:
     """Speaker variant (text_latent_interleave_ratio in the checkpoint
@@ -467,6 +512,8 @@ def compose_speaker_state(
     """
     if not text.strip():
         raise ValueError("FireRedTTS3 speaker requests require non-empty input text")
+    else:
+        pass
     reference_audio, prompt_text = resolve_request_reference(inputs, tts_params)
     if reference_audio is not None or (
         prompt_text is not None and str(prompt_text).strip()
@@ -475,6 +522,8 @@ def compose_speaker_state(
             "FireRedTTS3 speaker variant takes text-only tts; reference audio "
             "is not used (deploy a Base/Instruct checkpoint for voice cloning)"
         )
+    else:
+        pass
     task = first_not_none(
         inputs.get("task_type"), tts_params.get("task_type"), params.get("task_type")
     )
@@ -483,6 +532,8 @@ def compose_speaker_state(
             f"FireRedTTS3 speaker variant supports only text-only tts; "
             f"got task_type {task!r}"
         )
+    else:
+        pass
     dual_stream = bool(
         first_not_none(
             params.get("dual_stream"),
@@ -497,6 +548,8 @@ def compose_speaker_state(
             "FireRedTTS3 dual_stream requires a checkpoint with "
             "text_latent_interleave_ratio in its config"
         )
+    else:
+        pass
     speaker_token = str(config.speaker_token or "<|rand_speaker|>")
     if dual_stream:
         style = first_not_none(
@@ -521,6 +574,8 @@ def compose_speaker_state(
             text_stream_ids=text_ids,
             text_pad_id=text_pad_id,
         )
+    else:
+        pass
     return FireRedTTS3State(
         sample_rate=int(config.audio_sample_rate),
         variant="speaker",
@@ -535,12 +590,12 @@ def compose_speaker_state(
 def compose_instruct_state(
     config: FireRedTTS3Config,
     *,
-    tokenizer: Any,
+    tokenizer: PreTrainedTokenizerBase,
     task: str,
-    inputs: dict[str, Any],
-    params: dict[str, Any],
-    tts_params: dict[str, Any],
-    preprocessing_params: dict[str, Any],
+    inputs: dict[str, JsonValue],
+    params: dict[str, JsonValue],
+    tts_params: dict[str, JsonValue],
+    preprocessing_params: dict[str, JsonValue],
     text: str,
 ) -> FireRedTTS3State:
     instructions = first_not_none(
@@ -548,6 +603,8 @@ def compose_instruct_state(
     )
     if instructions is not None:
         instructions = str(instructions).strip() or None
+    else:
+        pass
     reference_audio, prompt_text_value = resolve_request_reference(inputs, tts_params)
 
     prompt_audio: str | None = None
@@ -556,16 +613,22 @@ def compose_instruct_state(
     if task == "tts":
         if not text.strip():
             raise ValueError("FireRedTTS3 tts requires non-empty input text")
+        else:
+            pass
         if reference_audio is None:
             raise ValueError(
                 "FireRedTTS3-Instruct tts requires a reference audio "
                 "(ref_audio / references[0])"
             )
+        else:
+            pass
         if prompt_text_value is None or not str(prompt_text_value).strip():
             raise ValueError(
                 "FireRedTTS3-Instruct tts requires the reference audio "
                 "transcript (ref_text / references[0].text)"
             )
+        else:
+            pass
         prompt_audio = reference_audio
         prompt_text = str(prompt_text_value).strip()
         prompt_patches = count_audio_patches(prompt_audio, cap_seconds=None)
@@ -573,12 +636,18 @@ def compose_instruct_state(
     elif task == "voice_design":
         if not text.strip():
             raise ValueError("FireRedTTS3 voice_design requires non-empty input text")
+        else:
+            pass
         if not instructions:
             raise ValueError("FireRedTTS3 voice_design requires instructions")
+        else:
+            pass
         chatml = compose_voice_design(instructions, text.strip())
     elif task == "semantic_edit":
         if not instructions:
             raise ValueError("FireRedTTS3 semantic_edit requires instructions")
+        else:
+            pass
         audio_in = require_edit_source(reference_audio, task)
         edit_patches = count_audio_patches(audio_in, cap_seconds=MAX_EDIT_SECONDS)
         chatml = compose_semantic_edit(instructions, edit_patches)
@@ -614,6 +683,8 @@ def require_edit_source(reference_audio: str | None, task: str) -> str:
         raise ValueError(
             f"FireRedTTS3 {task} requires a reference audio (the edit source)"
         )
+    else:
+        pass
     return reference_audio
 
 
@@ -634,6 +705,8 @@ def create_preprocessing_executor(
     config = load_checkpoint_hf_config(root)
     if config is None:
         raise FileNotFoundError(f"FireRedTTS3 config.json not found at {root}")
+    else:
+        pass
     tokenizer = AutoTokenizer.from_pretrained(root, local_files_only=True)
 
     def _preprocess(payload: StagePayload) -> StagePayload:
@@ -669,16 +742,22 @@ def create_reference_encode_executor(
     concrete_device = resolve_concrete_device(device, gpu_id)
     if concrete_device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("FireRedTTS3 reference encode requires CUDA")
+    else:
+        pass
     root = str(resolve_checkpoint(model_path))
     config = load_checkpoint_hf_config(root)
     if config is None:
         raise FileNotFoundError(f"FireRedTTS3 config.json not found at {root}")
+    else:
+        pass
     bundle = FireRedReferenceBundle(root, config, str(concrete_device))
     if warmup_on_init:
         # The first served request would otherwise pay the encoders' cold
         # start in its TTFP; the bundle warms them with a dummy clip, off
         # the reference cache.
         bundle.warmup()
+    else:
+        pass
     encoder = FireRedReferenceEncoder(
         bundle,
         model_id=root,
@@ -697,6 +776,8 @@ def create_reference_encode_executor(
         chunk = prompt_stream_message(result)
         if chunk is not None:
             scheduler.outbox.put(chunk)
+        else:
+            pass
         return result
 
     scheduler = SimpleScheduler(
@@ -725,12 +806,14 @@ def create_talker_executor(
     async_decode_min_batch_size: int = 2,
     device: str | None = None,
     gpu_id: int | None = None,
-    server_args_overrides: dict[str, Any] | None = None,
+    server_args_overrides: dict[str, JsonValue] | None = None,
 ) -> OmniScheduler:
     from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
 
     if not torch.cuda.is_available():
         raise RuntimeError("FireRedTTS3 talker requires CUDA")
+    else:
+        pass
     return FireRedTTS3EngineBuilder(
         n_timesteps=n_timesteps,
         max_patches=max_patches,
@@ -779,11 +862,15 @@ def create_vocoder_executor(
 
     if not torch.cuda.is_available():
         raise RuntimeError("FireRedTTS3 vocoder requires CUDA")
+    else:
+        pass
     concrete_device = resolve_concrete_device(device, gpu_id)
     root = str(resolve_checkpoint(model_path))
     config = load_checkpoint_hf_config(root)
     if config is None:
         raise FileNotFoundError(f"FireRedTTS3 config.json not found at {root}")
+    else:
+        pass
     decoder = load_redae_decoder(root, config, device=concrete_device)
     # stream_slots bounds concurrent stream states; admission is owned by the
     # talker's max_running_requests (config.py enforces the match).
@@ -808,6 +895,8 @@ def create_vocoder_executor(
     # the warmup cannot overlap request-time GPU work from colocated stages.
     if warmup_on_init:
         scheduler.warmup_now()
+    else:
+        pass
     return scheduler
 
 

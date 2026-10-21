@@ -67,6 +67,8 @@ class PackedQkvModel:
                     packed = PackedAttention(attention)
                     self.model.set_submodule(name, packed)
                     self.layers[name] = packed
+            else:
+                pass
         candidate = dict(
             chain(self.model.named_parameters(), self.model.named_buffers())
         )
@@ -76,6 +78,8 @@ class PackedQkvModel:
             raise RuntimeError(
                 "Packed DiT must preserve all original parameter and buffer bindings"
             )
+        else:
+            pass
         self.projections = {
             f"{name}.{role}.{parameter}": TensorBinding(
                 value=value,
@@ -84,7 +88,9 @@ class PackedQkvModel:
                 stride=value.stride(),
                 dtype=value.dtype,
                 device=value.device,
-                version=None if torch.is_inference(value) else value._version,
+                version=(
+                    None if torch.is_inference(value) else value._version
+                ),  # noqa: leading-underscore  # PyTorch tensor version API
             )
             for name, layer in self.layers.items()
             for role in ("to_q", "to_k", "to_v")
@@ -96,7 +102,9 @@ class PackedQkvModel:
         """Reject changes to source projections copied into the packed weights."""
         for name, binding in self.projections.items():
             current = self.source.get_parameter(name)
-            version = None if torch.is_inference(current) else current._version
+            version = (
+                None if torch.is_inference(current) else current._version
+            )  # noqa: leading-underscore  # PyTorch tensor version API
             if (
                 current is not binding.value
                 or current.data_ptr() != binding.pointer
@@ -109,6 +117,8 @@ class PackedQkvModel:
                 raise RuntimeError(
                     f"Packed DiT projection changed; rebuild mode: {name}"
                 )
+            else:
+                pass
 
     def record_stream(self, stream: torch.cuda.Stream) -> None:
         for tensor in self.tensors:

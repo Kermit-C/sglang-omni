@@ -148,9 +148,13 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
         self.lock = threading.Lock()
         self.debug_dump_count = 0
 
-    def decode_stream_context(self) -> Any:
+    def decode_stream_context(
+        self,
+    ) -> contextlib.nullcontext | torch.cuda.StreamContext:
         if self.decode_stream is None:
             return contextlib.nullcontext()
+        else:
+            pass
         return torch.cuda.stream(self.decode_stream)
 
     def maybe_dump_latents(self, latents: torch.Tensor) -> None:
@@ -160,6 +164,8 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
             path = os.path.join(dump_dir, f"latents_{self.debug_dump_count}.pt")
             torch.save(latents.detach().cpu(), path)
             self.debug_dump_count += 1
+        else:
+            pass
 
     def prepare_item(
         self, payload: StagePayload
@@ -167,9 +173,13 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
         state = load_firered_tts3_state(payload)
         if state.generated_latents is None or state.generated_latents.numel() == 0:
             raise RuntimeError("FireRedTTS3 vocoder received no generated latents")
+        else:
+            pass
         parts = []
         if state.prompt_latents is not None and state.prompt_latents.numel():
             parts.append(state.prompt_latents)
+        else:
+            pass
         parts.append(state.generated_latents)
         return state, torch.cat(parts, dim=1)
 
@@ -184,11 +194,15 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
                 "FireRedTTS3 latents must have shape [1, frames, redae_dim], "
                 f"got {tuple(latents.shape)}"
             )
+        else:
+            pass
         if latents.shape[2] != self.decoder.in_proj.in_features:
             raise ValueError(
                 f"FireRedTTS3 latent width must be {self.decoder.in_proj.in_features}, "
                 f"got {latents.shape[2]}"
             )
+        else:
+            pass
         self.maybe_dump_latents(latents)
         with self.lock, torch.no_grad(), self.decode_stream_context():
             probe = ProfilingProbe.create()
@@ -213,6 +227,8 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
             trim = int(state.left_context_size) * SAMPLES_PER_LATENT_FRAME
             if trim > 0:
                 audio = audio[:, trim:]
+            else:
+                pass
             outputs.append((audio, self.sample_rate))
         return outputs
 
@@ -233,9 +249,13 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
             # The Instruct text-phase product (voice plan / edited
             # transcript); surfaces as chunk.text on the client.
             payload.data["text"] = state.gen_text
+        else:
+            pass
         usage = build_usage(state)
         if usage is not None:
             payload.data["usage"] = usage
+        else:
+            pass
         return payload
 
     async def decode_payload(self, payload: StagePayload) -> StagePayload:
@@ -382,6 +402,8 @@ class FireRedTTS3StreamingVocoder(
             # A coalesced group may span every admitted stream: the decoder
             # is CPU-launch bound, so a wide group costs ~one row.
             self.stream_chunk_batch_max = self.stream_slots
+        else:
+            pass
         super().__init__(
             self.batch.decode_payload,
             batch_compute_fn=self.batch.decode_payloads,
@@ -410,15 +432,21 @@ class FireRedTTS3StreamingVocoder(
     ) -> None:
         if origin == "payload":
             return
+        else:
+            pass
         metadata = source
         state.pending_codes_ready = metadata.get("codes_ready_event")
         if not metadata.get(PROMPT_CHUNK_METADATA_KEY):
             return
+        else:
+            pass
         if state.prompt_seen:
             raise RuntimeError(
                 f"FireRedTTS3 stream for {request_id!r} carried a second "
                 "prompt chunk"
             )
+        else:
+            pass
         state.prompt_seen = True
         left_frames = int(metadata.get(LEFT_CONTEXT_METADATA_KEY) or 0)
         if left_frames <= 0:
@@ -426,6 +454,8 @@ class FireRedTTS3StreamingVocoder(
                 f"FireRedTTS3 prompt chunk for {request_id!r} must carry a "
                 "positive left_context_size"
             )
+        else:
+            pass
         state.stream_start = left_frames * SAMPLES_PER_LATENT_FRAME
         state.incoming_prompt = True
 
@@ -438,11 +468,15 @@ class FireRedTTS3StreamingVocoder(
                 "FireRedTTS3 latent chunks must have shape [1, frames, redae_dim] "
                 f"with frames >= 1, got {tuple(codes.shape)}"
             )
+        else:
+            pass
         if codes.shape[-1] != self.batch.decoder.in_proj.in_features:
             raise ValueError(
                 f"FireRedTTS3 latent width must be "
                 f"{self.batch.decoder.in_proj.in_features}, got {codes.shape[-1]}"
             )
+        else:
+            pass
         if codes.device == self.device and codes.dtype == torch.float32:
             converted = codes
         else:
@@ -453,12 +487,16 @@ class FireRedTTS3StreamingVocoder(
                 event = state.pending_codes_ready or state.codes_ready
                 if event is not None and codes.is_cuda:
                     torch.cuda.current_stream(self.device).wait_event(event)
+                else:
+                    pass
                 converted = codes.to(device=self.device, dtype=torch.float32)
         decode_stream = self.batch.decode_stream
         if decode_stream is not None and converted.is_cuda:
             # Default-stream allocation read on the decode stream: pin it
             # against reuse until the decode stream passes the free point.
             converted.record_stream(decode_stream)
+        else:
+            pass
         return converted
 
     def ingest(
@@ -468,6 +506,8 @@ class FireRedTTS3StreamingVocoder(
         if state.pending_codes_ready is not None:
             state.codes_ready = state.pending_codes_ready
             state.pending_codes_ready = None
+        else:
+            pass
         if state.incoming_prompt:
             state.incoming_prompt = False
             if self.prompt_predecode:
@@ -475,6 +515,8 @@ class FireRedTTS3StreamingVocoder(
             else:
                 state.prompt_latents = codes
             return
+        else:
+            pass
         state.pending.append(codes)
 
     def decode_prompt(self, state: FireRedStreamState, prompt: torch.Tensor) -> None:
@@ -501,6 +543,8 @@ class FireRedTTS3StreamingVocoder(
         """Order this thread's stream after the talker's newest chunk."""
         if state.codes_ready is None:
             return
+        else:
+            pass
         torch.cuda.current_stream(self.device).wait_event(state.codes_ready)
         state.codes_ready = None
 
@@ -513,8 +557,12 @@ class FireRedTTS3StreamingVocoder(
         state.emitted_samples += int(audio.shape[-1])
         if start <= 0:
             return audio
+        else:
+            pass
         if start >= int(audio.shape[-1]):
             return None
+        else:
+            pass
         return audio[:, start:]
 
     def emit_cpu_window(
@@ -526,6 +574,8 @@ class FireRedTTS3StreamingVocoder(
         waveform = self.emit_window(state, audio)
         if waveform is None:
             return None
+        else:
+            pass
         return waveform.cpu()
 
     def decode_chunk(
@@ -551,11 +601,21 @@ class FireRedTTS3StreamingVocoder(
                 result = runner.run(latents, decoder_state)
                 if result is not None:
                     return result
+                else:
+                    pass
+            else:
+                pass
             cold = self.cold_graph_runner
             if cold is not None and decoder_state is None:
                 result = cold.run(latents, lead_samples=lead_samples)
                 if result is not None:
                     return result
+                else:
+                    pass
+            else:
+                pass
+        else:
+            pass
         return self.batch.decoder.forward_stream(
             latents, decoder_state, last_chunk=last_chunk
         )
@@ -574,12 +634,16 @@ class FireRedTTS3StreamingVocoder(
                     or state.decoder_state.istft_cache is None
                 ):
                     return None
+                else:
+                    pass
                 # Every ingested chunk was already decoded; the terminal OLA
                 # tail remains. It depends only on the cached windowed iSTFT
                 # frames.
                 tail = self.batch.decoder.flush_stream(state.decoder_state)
                 state.decoder_state = None
                 return self.emit_cpu_window(state, tail)
+            else:
+                pass
             probe = ProfilingProbe.create()
             with probe.segment("stream_decode"):
                 audio, decoder_state = self.decode_chunk(
@@ -600,6 +664,8 @@ class FireRedTTS3StreamingVocoder(
         parts: list[torch.Tensor] = []
         if state.prompt_latents is not None:
             parts.append(state.prompt_latents)
+        else:
+            pass
         parts.extend(state.pending)
         return parts
 
@@ -608,6 +674,8 @@ class FireRedTTS3StreamingVocoder(
         parts = self.latent_parts(state)
         if not parts:
             return None
+        else:
+            pass
         return torch.cat(parts, dim=1)
 
     def step_group_key(self, state: FireRedStreamState) -> tuple[int, bool, int]:
@@ -617,9 +685,13 @@ class FireRedTTS3StreamingVocoder(
         frames = sum(int(chunk.shape[1]) for chunk in state.pending)
         if state.prompt_latents is not None:
             frames += int(state.prompt_latents.shape[1])
+        else:
+            pass
         decoder_state = state.decoder_state
         if decoder_state is None:
             return frames, False, 0
+        else:
+            pass
         return frames, True, int(decoder_state.frames_seen)
 
     def select_step_participants(
@@ -631,8 +703,12 @@ class FireRedTTS3StreamingVocoder(
                 groups.setdefault(self.step_group_key(state), []).append(
                     (request_id, state)
                 )
+            else:
+                pass
         if not groups:
             return []
+        else:
+            pass
         # One group per step; the pump loops until no participants remain, so
         # off-progress rows decode on the following iterations of the same
         # drain. The cap bounds one group to the admitted stream count.
@@ -687,6 +763,8 @@ class FireRedTTS3StreamingVocoder(
                         assert state.decoder_state is not None
                         merge_inputs.append(state.decoder_state)
                     merged = self.batch.decoder.merge_states(merge_inputs)
+                else:
+                    pass
                 with ProfilingProbe.shared_segment("stream_decode", probes):
                     audio, merged_state = self.decode_chunk(
                         torch.cat(latents, dim=0) / self.batch.redae_scale,
@@ -709,6 +787,8 @@ class FireRedTTS3StreamingVocoder(
                 waveform = self.emit_cpu_window(state, audio)
                 if waveform is not None:
                     decoded[request_id] = waveform
+                else:
+                    pass
         return decoded
 
     def final_result_data(
@@ -723,9 +803,13 @@ class FireRedTTS3StreamingVocoder(
         }
         if tts_state.gen_text:
             result["text"] = tts_state.gen_text
+        else:
+            pass
         usage = build_usage(tts_state)
         if usage is not None:
             result["usage"] = usage
+        else:
+            pass
         return result
 
     @staticmethod
@@ -735,6 +819,8 @@ class FireRedTTS3StreamingVocoder(
         dump_dir = os.environ.get(DEBUG_DUMP_DIR_ENV)
         if not dump_dir:
             return
+        else:
+            pass
         parts = [
             tensor
             for tensor in (state.prompt_latents, state.generated_latents)
@@ -742,6 +828,8 @@ class FireRedTTS3StreamingVocoder(
         ]
         if not parts:
             return
+        else:
+            pass
         os.makedirs(dump_dir, exist_ok=True)
         path = os.path.join(dump_dir, f"latents_stream_{request_id}.pt")
         torch.save(torch.cat(parts, dim=1).detach().cpu(), path)
@@ -757,6 +845,8 @@ class FireRedTTS3StreamingVocoder(
         trim = int(tts_state.left_context_size) * SAMPLES_PER_LATENT_FRAME
         if trim > 0:
             audio = audio[:, trim:]
+        else:
+            pass
         return audio
 
     def release_stream_resources(
@@ -785,10 +875,16 @@ class FireRedTTS3StreamingVocoder(
                 # Capture inside the decode stream context the replays will
                 # run under; capture failures leave eager fallbacks per key.
                 self.graph_runner.capture_all()
+            else:
+                pass
             if self.cold_graph_runner is not None:
                 self.cold_graph_runner.capture_all()
+            else:
+                pass
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
+        else:
+            pass
         logger.info("FireRedTTS3 streaming vocoder warmup complete")
 
 

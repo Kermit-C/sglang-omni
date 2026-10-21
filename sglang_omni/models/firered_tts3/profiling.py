@@ -42,16 +42,22 @@ class ProfilingProbe:
         if not self.enabled:
             yield
             return
+        else:
+            pass
         # Sync both ends so GPU work is attributed to the segment that
         # launched it; the syncs themselves make this a profiling-only path.
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+        else:
+            pass
         start = time.perf_counter()
         try:
             yield
         finally:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
+            else:
+                pass
             self.segments[name] = (
                 self.segments.get(name, 0.0) + time.perf_counter() - start
             )
@@ -69,14 +75,20 @@ class ProfilingProbe:
         if not active:
             yield
             return
+        else:
+            pass
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+        else:
+            pass
         start = time.perf_counter()
         try:
             yield
         finally:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
+            else:
+                pass
             elapsed = time.perf_counter() - start
             for probe in active:
                 probe.segments[name] = probe.segments.get(name, 0.0) + elapsed
@@ -84,6 +96,8 @@ class ProfilingProbe:
     def log(self, request_id: str) -> None:
         if not self.enabled:
             return
+        else:
+            pass
         detail = ", ".join(
             f"{name}={duration * 1e3:.1f}ms"
             for name, duration in sorted(self.segments.items())

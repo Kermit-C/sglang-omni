@@ -163,6 +163,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         self.prefill_launch_at: float | None = None
         if flow_graphs is not None:
             self.flow_graphs = flow_graphs
+        else:
+            pass
         self.flow_batching = flow_batching
         self.control_token_fastpath = control_token_fastpath
         self.skip_min_patch_stop = skip_min_patch_stop
@@ -172,12 +174,16 @@ class FireRedTTS3ModelRunner(ModelRunner):
         if span is None or span.device != device:
             span = flow_t_span(n_timesteps, device)
             self.t_span_cache[n_timesteps] = span
+        else:
+            pass
         return span
 
     def before_prefill(self, forward_batch, schedule_batch, requests: list) -> None:
         del schedule_batch
         if not requests:
             return
+        else:
+            pass
         self.release_retracted_flow_states()
         model = self.model
         device = forward_batch.input_ids.device
@@ -194,6 +200,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     data.flow_state, FireRedFlowResume
                 ):
                     self.suspend_request_data(data)
+                else:
+                    pass
                 self.active_requests.pop(request.request_id, None)
                 resume = data.flow_state
                 state = data.state
@@ -209,6 +217,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                             "reference-conditioning tensors (prompt_latents / "
                             "speaker_embedding)"
                         )
+                    else:
+                        pass
                 elif state.variant != "instruct" and (
                     state.prompt_latents is None or state.speaker_embedding is None
                 ):
@@ -216,6 +226,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         "FireRedTTS3 request is missing its reference-conditioning "
                         "tensors (prompt_latents / speaker_embedding)"
                     )
+                else:
+                    pass
                 prompt_latents = (
                     state.prompt_latents.to(device=device, dtype=torch.float32)
                     if state.prompt_latents is not None
@@ -246,6 +258,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     )
                 if data.latent_patches:
                     latents_gen = torch.cat([latents_gen, *data.latent_patches], dim=1)
+                else:
+                    pass
                 data.flow_state = FlowState(
                     generator=generator,
                     prompt_patch_count=data.prompt_patch_count,
@@ -284,12 +298,16 @@ class FireRedTTS3ModelRunner(ModelRunner):
                             f"FireRedTTS3 prefill row is {prompt_embeds.shape[1]} "
                             f"positions, expected {data.prefill_len}"
                         )
+                    else:
+                        pass
                     request_rows = [prompt_embeds[0].to(embed_dtype)]
                     replay_rows = self.build_replay_rows(
                         model, data, device, embed_dtype
                     )
                     if replay_rows is not None:
                         request_rows.append(replay_rows)
+                    else:
+                        pass
                 prefix_len = len(data.req.prefix_indices)
                 req_len = int(data.req.extend_range.length)
                 generated = req_len - data.prefill_len
@@ -325,6 +343,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             forward_batch.input_embeds = torch.cat(rows, dim=0)
             if any(data.probe.enabled for _rid, data in materialized):
                 self.prefill_launch_at = time.perf_counter()
+            else:
+                pass
         except BaseException:
             for request_id, data in materialized:
                 self.active_requests.pop(request_id, None)
@@ -362,6 +382,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         ):
             if latents is None:
                 continue
+            else:
+                pass
             patch_embeds = model.patch_encoder(
                 latents.to(device=device, dtype=torch.float32)
             )
@@ -373,6 +395,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     f"{slots} placeholder tokens but the audio encodes to "
                     f"{int(patch_embeds.shape[1])} patches"
                 )
+            else:
+                pass
             embeds = embeds.masked_scatter(
                 mask.unsqueeze(-1),
                 patch_embeds.reshape(-1).to(embeds.dtype),
@@ -393,6 +417,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         is only a fallback for async output_ids lagging one token behind."""
         if data.dual_stream:
             return self.build_dual_stream_replay_rows(model, data, device, embed_dtype)
+        else:
+            pass
         text_tokens = self.text_output_tokens(data)
         rows = []
         if text_tokens:
@@ -400,12 +426,16 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 data.req.output_ids[:text_tokens], dtype=torch.long, device=device
             )
             rows.append(model.get_input_embeddings()(ids).to(embed_dtype))
+        else:
+            pass
         if data.latent_patches:
             rows.append(
                 model.patch_encoder(torch.cat(data.latent_patches, dim=1))[0].to(
                     embed_dtype
                 )
             )
+        else:
+            pass
         excess = len(data.req.output_ids) - text_tokens - len(data.latent_patches)
         if data.stop_pending and excess > 0:
             # A deferred stop's extra feeds have no patches; their hidden
@@ -414,8 +444,12 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 (excess,), CONTROL_TOKEN_ID, dtype=torch.long, device=device
             )
             rows.append(model.get_input_embeddings()(ids).to(embed_dtype))
+        else:
+            pass
         if not rows:
             return None
+        else:
+            pass
         return torch.cat(rows, dim=0)
 
     def build_dual_stream_replay_rows(
@@ -424,6 +458,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         output_ids = [int(token) for token in data.req.output_ids]
         if not output_ids:
             return None
+        else:
+            pass
         embed_tokens = model.get_input_embeddings()
         rows: list[torch.Tensor] = []
         text_buffer: list[int] = []
@@ -434,6 +470,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 ids = torch.tensor(text_buffer, dtype=torch.long, device=device)
                 rows.append(embed_tokens(ids).to(embed_dtype))
                 text_buffer.clear()
+            else:
+                pass
 
         for token in output_ids:
             if token == CONTROL_TOKEN_ID:
@@ -474,6 +512,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             data.pending_feedback_queue.append(
                 model.patch_encoder(data.latent_patches[-1])[0, 0].to(dtype=embed_dtype)
             )
+        else:
+            pass
         return torch.cat(rows, dim=0)
 
     @staticmethod
@@ -484,11 +524,15 @@ class FireRedTTS3ModelRunner(ModelRunner):
             # Never ran a text phase (Base, Instruct tts/acoustic_edit, or a
             # text request retracted before its first sample).
             return 0
+        else:
+            pass
         n_text = len(data.text_token_ids) + int(data.eot_sampled)
         if data.text_ar_mode in (TEXT_MODE_AUDIO_ZERO, TEXT_MODE_AUDIO):
             n_text += 2
         elif data.text_ar_mode == TEXT_MODE_SOSP:
             n_text += 1
+        else:
+            pass
         return n_text
 
     def before_decode(
@@ -497,6 +541,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         del schedule_batch, is_lookahead
         if not requests:
             return
+        else:
+            pass
         model = self.model
         model.text_logits_requested = any(
             request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests
@@ -571,6 +617,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         # for more than the captured mode, so request FULL when the graph is on.
         if self.model.graph_feedback_buffer is not None:
             return CaptureHiddenMode.FULL
+        else:
+            pass
         return CaptureHiddenMode.LAST
 
     def sample_before_post_prefill(
@@ -593,8 +641,12 @@ class FireRedTTS3ModelRunner(ModelRunner):
         del forward_batch
         if bool(getattr(schedule_batch, "is_prefill_only", False)):
             return
+        else:
+            pass
         if not requests:
             return
+        else:
+            pass
         if self.prefill_launch_at is not None:
             # The wall between the before_prefill handoff and this hook is the
             # engine's prefill forward (plus in-engine bookkeeping); one
@@ -606,6 +658,10 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 probe = request.data.probe
                 if probe is not None and probe.enabled:
                     probe.segments["engine_prefill"] = engine_prefill
+                else:
+                    pass
+        else:
+            pass
         hidden = self.hidden_states(result)
         if hidden.ndim == 3:
             hidden = hidden.reshape(-1, hidden.shape[-1])
@@ -613,6 +669,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             raise RuntimeError(
                 f"FireRedTTS3 expected rank-2/3 prefill hidden, got {hidden.ndim}"
             )
+        else:
+            pass
         offset = 0
         next_token_ids = []
         flow_rows: list[FlowRow] | None = [] if self.flow_batching else None
@@ -622,6 +680,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             request_hidden = hidden[offset : offset + length]
             if request_hidden.size(0) != length:
                 raise RuntimeError("FireRedTTS3 prefill hidden rows are incomplete")
+            else:
+                pass
             offset += length
             hidden_f32 = request_hidden.to(torch.float32)
             if data.stop_pending:
@@ -630,6 +690,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 # the next decode resolves the finish and discards its row.
                 next_token_ids.append(CONTROL_TOKEN_ID)
                 continue
+            else:
+                pass
             flow = data.flow_state
             if data.text_ar_mode == TEXT_MODE_TEXT:
                 # The prefill tail is the reference's first text sampling
@@ -638,6 +700,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     self.record_text_sample(data, result.next_token_ids[row])
                 )
                 continue
+            else:
+                pass
             if data.dual_stream:
                 if not data.req.output_ids:
                     # First prefill: the machine starts on the next decode
@@ -645,6 +709,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     # (generate_streaming_noicl leaves the prefix unused).
                     next_token_ids.append(self.next_text_feed(data))
                     continue
+                else:
+                    pass
                 # The re-prefill tail is the interrupted step's input. Rebuild
                 # the earlier cond rows before resuming its post-work; a flow
                 # step appends the tail itself.
@@ -656,12 +722,16 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         ],
                         dim=1,
                     )
+                else:
+                    pass
                 next_token_ids.append(
                     self.dual_stream_step(
                         data, hidden_f32[-1:], flow_rows, defer_stop=True
                     )
                 )
                 continue
+            else:
+                pass
             mode = data.text_ar_mode
             if mode == TEXT_MODE_FINALIZE:
                 # The interrupted finalize fed embed(EOT/last-token) without
@@ -669,12 +739,18 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 data.text_ar_mode = TEXT_MODE_SOSP
                 next_token_ids.append(AUDIO_SOS_ID)
                 continue
+            else:
+                pass
             if mode == TEXT_MODE_SOSP:
                 data.text_ar_mode = TEXT_MODE_AUDIO_ZERO
                 next_token_ids.append(AUDIO_SOS_ID)
                 continue
+            else:
+                pass
             if mode == TEXT_MODE_AUDIO_ZERO:
                 data.text_ar_mode = TEXT_MODE_AUDIO
+            else:
+                pass
             if flow.patch_count > 0:
                 # Re-prefill after retraction: rebuild the cond history from
                 # the full hidden row — the prompt-latent span, then one row
@@ -689,23 +765,31 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     hidden_f32[audio_start:-1].unsqueeze(0),
                 ]
                 flow.backbone_cond = torch.cat(rebuilt, dim=1)
+            else:
+                pass
             # Prefill skips already-finished requests before KV cleanup;
             # resolve a stop on the next decode step instead.
             self.flow_step(data, hidden_f32, flow_rows, defer_stop=True)
             next_token_ids.append(CONTROL_TOKEN_ID)
         if flow_rows:
             self.run_flow_rows(flow_rows)
+        else:
+            pass
         if offset != hidden.size(0):
             raise RuntimeError("FireRedTTS3 prefill hidden rows do not match requests")
+        else:
+            pass
         result.next_token_ids, host_token_ids = self.make_next_token_ids(
             next_token_ids, hidden.device, requests
         )
         if host_token_ids is not None:
             self.stage_token_ids(result, host_token_ids)
+        else:
+            pass
 
     def is_sync_speaker_audio(self, data: FireRedTTS3SGLangRequestData) -> bool:
         return (
-            not self._async_enabled
+            not self.async_enabled
             and data.state.variant == "speaker"
             and not data.dual_stream
             and data.text_ar_mode == TEXT_MODE_AUDIO
@@ -745,6 +829,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             data.text_token_ids or data.eot_sampled
         ):
             return len(data.text_token_ids) + int(data.eot_sampled) + 1
+        else:
+            pass
         return 0
 
     def record_text_sample(
@@ -764,9 +850,13 @@ class FireRedTTS3ModelRunner(ModelRunner):
             data.eot_sampled = True
             data.text_ar_mode = TEXT_MODE_FINALIZE
             return token
+        else:
+            pass
         data.text_token_ids.append(token)
         if data.text_fed >= TEXT_TOKEN_BUDGET:
             data.text_ar_mode = TEXT_MODE_FINALIZE
+        else:
+            pass
         return token
 
     def post_decode(
@@ -798,9 +888,13 @@ class FireRedTTS3ModelRunner(ModelRunner):
             data = request.data
             if not data.stop_pending:
                 continue
+            else:
+                pass
             data.stop_pending = False
             if not data.req.is_retracted and not data.req.finished():
                 data.req.finished_reason = FINISH_MATCHED_TOKEN(CONTROL_TOKEN_ID)
+            else:
+                pass
 
     def run_post_decode(
         self, result, requests: list, *, defer_stop: bool = False
@@ -810,6 +904,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         Shared by the sync post_decode and the async post_decode_launch."""
         if not requests:
             return
+        else:
+            pass
         hidden = self.hidden_states(result)
         if hidden.ndim == 3:
             hidden = hidden[:, -1]
@@ -817,6 +913,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             raise RuntimeError(
                 f"FireRedTTS3 expected rank-2/3 decode hidden, got {hidden.ndim}"
             )
+        else:
+            pass
         next_token_ids = []
         flow_rows: list[FlowRow] | None = [] if self.flow_batching else None
         for row, request in enumerate(requests):
@@ -832,7 +930,13 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         data.req.finished_reason = FINISH_MATCHED_TOKEN(
                             CONTROL_TOKEN_ID
                         )
+                    else:
+                        pass
+                else:
+                    pass
                 continue
+            else:
+                pass
             if data.dual_stream:
                 next_token_ids.append(
                     self.dual_stream_step(
@@ -843,6 +947,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     )
                 )
                 continue
+            else:
+                pass
             mode = data.text_ar_mode
             if mode == TEXT_MODE_TEXT:
                 next_token_ids.append(
@@ -859,6 +965,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             else:
                 if mode == TEXT_MODE_AUDIO_ZERO:
                     data.text_ar_mode = TEXT_MODE_AUDIO
+                else:
+                    pass
                 self.flow_step(
                     data,
                     hidden[row : row + 1].to(torch.float32),
@@ -868,11 +976,15 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 next_token_ids.append(CONTROL_TOKEN_ID)
         if flow_rows:
             self.run_flow_rows(flow_rows)
+        else:
+            pass
         result.next_token_ids, host_token_ids = self.make_next_token_ids(
             next_token_ids, hidden.device, requests
         )
         if host_token_ids is not None:
             self.stage_token_ids(result, host_token_ids)
+        else:
+            pass
 
     def dual_stream_cond_rows(
         self, data: FireRedTTS3SGLangRequestData, hidden_f32: torch.Tensor
@@ -893,6 +1005,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             for k in range(na - 1):
                 if remaining == 0:
                     break
+                else:
+                    pass
                 rows.append(base + nt + k)
                 remaining -= 1
             group += 1
@@ -931,8 +1045,12 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 data.ds_stage = DS_STAGE_PATCH
                 data.ds_index = 0
                 return CONTROL_TOKEN_ID
+            else:
+                pass
             data.ds_index += 1
             return self.next_text_feed(data)
+        else:
+            pass
         if data.ds_index >= na - 1:
             # Last patch feed of the group: stop check only.
             data.ds_stage = DS_STAGE_TEXT
@@ -940,7 +1058,11 @@ class FireRedTTS3ModelRunner(ModelRunner):
             if self.stop_predicted(data, hidden_f32):
                 self.mark_stop(data, defer=defer_stop)
                 return CONTROL_TOKEN_ID
+            else:
+                pass
             return self.next_text_feed(data)
+        else:
+            pass
         # Intermediate patch feed: its hidden drives the next flow.
         self.run_flow(data, hidden_f32, flow_rows)
         data.ds_index += 1
@@ -959,6 +1081,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         if self.stop_predicted(data, hidden_f32):
             self.mark_stop(data, defer=defer_stop)
             return
+        else:
+            pass
         self.run_flow(data, hidden_f32, flow_rows)
 
     @staticmethod
@@ -986,6 +1110,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
             and flow.patch_count < state.min_patches
         ):
             return False
+        else:
+            pass
         with torch.inference_mode(), data.probe.segment("stop_head"):
             stop_logits = model.stop_head(hidden_f32[-1:].unsqueeze(0))
             stop_score = float(torch.sigmoid(stop_logits).reshape(-1)[-1].item())
@@ -1012,6 +1138,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
         if flow_rows is not None:
             flow_rows.append(row)
             return
+        else:
+            pass
         self.run_flow_rows([row])
 
     def prepare_flow_row(
@@ -1095,6 +1223,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                             n_timesteps,
                             model.patch_size,
                         )
+                    else:
+                        pass
                 with ProfilingProbe.shared_segment("patch_encoder", probes):
                     # Batched rows aggregate to [1, B, llm_hidden] (the
                     # encoder's trailing unsqueeze); one row per request.
@@ -1115,22 +1245,30 @@ class FireRedTTS3ModelRunner(ModelRunner):
         hidden = getattr(logits_output, "hidden_states", None)
         if hidden is None:
             hidden = getattr(result, "hidden_states", None)
+        else:
+            pass
         if not isinstance(hidden, torch.Tensor):
             raise RuntimeError(
                 "FireRedTTS3 SGLang forward did not return hidden states"
             )
+        else:
+            pass
         return hidden
 
     def on_request_finished(self, request_id: str, req_data) -> None:
         data = self.active_requests.pop(request_id, None)
         if data is not None and data.probe is not None:
             data.probe.log(request_id)
+        else:
+            pass
         self.clear_request_data(req_data)
 
     def reset_request(self, request_id: str) -> None:
         req_data = self.active_requests.pop(request_id, None)
         if req_data is not None:
             self.clear_request_data(req_data)
+        else:
+            pass
 
     def release_retracted_flow_states(self) -> None:
         for req_data in self.active_requests.values():
@@ -1140,6 +1278,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 and req_data.req.is_retracted
             ):
                 self.suspend_request_data(req_data)
+            else:
+                pass
 
     def suspend_request_data(self, req_data: FireRedTTS3SGLangRequestData) -> None:
         flow = req_data.flow_state

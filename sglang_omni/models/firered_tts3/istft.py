@@ -134,6 +134,8 @@ class ISTFT(nn.Module):
         # Append previous cache
         if cache is not None:
             ifft = torch.cat([cache, ifft], dim=-1)
+        else:
+            pass
         new_cache_t = self.win_length // self.hop_length - 1
         new_cache = ifft[..., -new_cache_t:]
 

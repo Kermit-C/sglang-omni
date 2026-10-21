@@ -146,7 +146,9 @@ def reference_nonstream_trajectory(model, prompt_ids, device, max_steps=600):
     cache = None
     rows = []
     for step_index in range(max_steps):
-        backbone_out, cache = model._backbone_one_step(backbone_in, cache=cache)
+        backbone_out, cache = model._backbone_one_step(
+            backbone_in, cache=cache
+        )  # noqa: leading-underscore  # reference oracle method
         hidden = backbone_out[0, -1].float().cpu()
         backbone_cond = torch.cat([backbone_cond, backbone_out[:, -1:]], dim=1)
         stop_score = float(
@@ -156,7 +158,7 @@ def reference_nonstream_trajectory(model, prompt_ids, device, max_steps=600):
         patch = None
         if not stopped:
             patch = (
-                model._flow_one_step(
+                model._flow_one_step(  # noqa: leading-underscore  # reference oracle method
                     backbone_cond=backbone_cond,
                     latents_gen=latents_gen,
                     t_span=t_span,
@@ -205,7 +207,7 @@ class SpeakerSidePath:
 
 def make_runner(model) -> FireRedTTS3ModelRunner:
     runner = object.__new__(FireRedTTS3ModelRunner)
-    runner._async_enabled = False
+    runner.async_enabled = False
     runner.model = model
     runner.t_span_cache = {}
     return runner
@@ -275,7 +277,9 @@ def reference_stream_trajectory(
     nt, na = 2, 1
     fix_seed(1234)
     backbone_in = model.backbone_llm.model.embed_tokens(prefix_ids.to(device))
-    backbone_out, cache = model._backbone_one_step(backbone_in, cache=None)
+    backbone_out, cache = model._backbone_one_step(
+        backbone_in, cache=None
+    )  # noqa: leading-underscore  # reference oracle method
     t_span = torch.linspace(0, 1, 11, device=device)
     t_span = 1 - torch.cos(t_span * 0.5 * torch.pi)
     latents_gen = torch.zeros(
@@ -295,8 +299,10 @@ def reference_stream_trajectory(
         else:
             group_ids = text_ids[:, text_pos : text_pos + nt]
         group_ids = group_ids.to(device)
-        text_out, cache = model._backbone_one_step(
-            model.backbone_llm.model.embed_tokens(group_ids), cache=cache
+        text_out, cache = (
+            model._backbone_one_step(  # noqa: leading-underscore  # reference oracle method
+                model.backbone_llm.model.embed_tokens(group_ids), cache=cache
+            )
         )
         for position in range(nt):
             fed = int(group_ids[0, position])
@@ -309,7 +315,7 @@ def reference_stream_trajectory(
         backbone_out = text_out
         for sub in range(na):
             backbone_cond = torch.cat([backbone_cond, backbone_out[:, -1:]], dim=1)
-            patch = model._flow_one_step(
+            patch = model._flow_one_step(  # noqa: leading-underscore  # reference oracle method
                 backbone_cond=backbone_cond,
                 latents_gen=latents_gen,
                 t_span=t_span,
@@ -322,8 +328,10 @@ def reference_stream_trajectory(
             # Record the flow on the LAST text step of the group.
             kind, fed, hidden, _p, _s = steps[-1]
             steps[-1] = (kind, fed, hidden, patch, False)
-            patch_out, cache = model._backbone_one_step(
-                model.patch_encoder.forward(patch.to(device)), cache=cache
+            patch_out, cache = (
+                model._backbone_one_step(  # noqa: leading-underscore  # reference oracle method
+                    model.patch_encoder.forward(patch.to(device)), cache=cache
+                )
             )
             backbone_out = patch_out
             stop = False

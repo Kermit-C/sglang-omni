@@ -16,9 +16,11 @@ variants (id 151669 is <|sosp|> in Base/Instruct checkpoints but
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from transformers import AutoConfig, PretrainedConfig
+
+from sglang_omni.utils.json import JsonValue
 
 FIREREDTTS3_MODEL_ARCH_OVERRIDE = "FireRedTTS3ForConditionalGeneration"
 
@@ -113,7 +115,7 @@ class FireRedTTS3Config(PretrainedConfig):
         special_tokens: dict[str, str | None] | None = None,
         # Generation defaults (request-overridable).
         generation_defaults: dict[str, int | float] | None = None,
-        **kwargs: Any,
+        **kwargs: JsonValue,
     ) -> None:
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
@@ -187,10 +189,16 @@ def detect_fireredtts3_variant(config: FireRedTTS3Config) -> FireRedTTS3Variant:
     """Classify a checkpoint into its FireRedTTS3 variant from config fields."""
     if config.text_latent_interleave_ratio is not None:
         return "speaker"
+    else:
+        pass
     if config.spk_in_dim is not None:
         return "base"
+    else:
+        pass
     if config.use_lm_head:
         return "instruct"
+    else:
+        pass
     raise ValueError(
         "unrecognized FireRedTTS3 checkpoint: none of the variant markers "
         "(text_latent_interleave_ratio / spk_in_dim / use_lm_head) is set"

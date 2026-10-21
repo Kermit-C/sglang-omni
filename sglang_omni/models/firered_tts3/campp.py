@@ -30,6 +30,8 @@ def extract_kaldi_mel(audio: torch.Tensor, audio_sr: int):
     if audio_sr != 16000:
         audio = torchaudio.functional.resample(audio, audio_sr, 16000)
         audio_sr = 16000
+    else:
+        pass
     feat = kaldi.fbank(
         audio,
         num_mel_bins=80,
@@ -67,6 +69,8 @@ def statistics_pooling(x, dim=-1, keepdim=False, unbiased=True, eps=1e-2):
     stats = torch.cat([mean, std], dim=-1)
     if keepdim:
         stats = stats.unsqueeze(dim=dim)
+    else:
+        pass
     return stats
 
 
@@ -93,6 +97,8 @@ class TDNNLayer(nn.Module):
                 kernel_size % 2 == 1
             ), f"Expect equal paddings, but got even kernel size ({kernel_size})"
             padding = (kernel_size - 1) // 2 * dilation
+        else:
+            pass
         self.linear = nn.Conv1d(
             in_channels,
             out_channels,
@@ -311,6 +317,8 @@ class BasicResBlock(nn.Module):
                 ),
                 nn.BatchNorm2d(self.expansion * planes),
             )
+        else:
+            pass
 
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
@@ -438,6 +446,10 @@ class CAMPPlus(nn.Module):
                 nn.init.kaiming_normal_(m.weight.data)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
+                else:
+                    pass
+            else:
+                pass
 
     def forward(self, x):
         x = x.permute(0, 2, 1)  # (B,T,F) => (B,F,T)

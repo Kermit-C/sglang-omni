@@ -5,16 +5,31 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Protocol
 
 import torch
+from sglang.srt.server_args import ServerArgs
 
+from sglang_omni.model_runner.model_worker import ModelWorker
+from sglang_omni.models.firered_tts3.compiled_dit import CompiledDiTExecutor
 from sglang_omni.models.firered_tts3.flow_graph import (
     FLOW_MODES,
+    FlowGraphRunner,
     FlowMode,
     prepare_flow_dit,
 )
-from sglang_omni.scheduling.engine_factory import TtsEngineBuilder
+from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
+from sglang_omni.models.firered_tts3.request_builders import (
+    FireRedTTS3SGLangRequestData,
+)
+from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
+from sglang_omni.proto import StagePayload
+from sglang_omni.scheduling.engine_factory import (
+    GenerationDefaults,
+    SchedulerExtras,
+    TtsEngineBuilder,
+)
+from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +38,19 @@ logger = logging.getLogger(__name__)
 CONTEXT_LENGTH = 8192
 
 
-class FireRedTTS3EngineBuilder(TtsEngineBuilder):
+class FireRedRequestBuilder(Protocol):
+    def __call__(self, payload: StagePayload) -> FireRedTTS3SGLangRequestData: ...
+
+
+class FireRedResultAdapter(Protocol):
+    def __call__(self, data: FireRedTTS3SGLangRequestData) -> StagePayload: ...
+
+
+class FireRedAbortCallback(Protocol):
+    def __call__(self, request_id: str) -> None: ...
+
+
+class FireRedTTS3EngineBuilder(TtsEngineBuilder[FireRedTTS3SGLangRequestData]):
     model_name = "fireredtts3"
     context_length = CONTEXT_LENGTH
 
@@ -85,6 +112,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
                 f"FireRedTTS3 flow_mode {flow_mode!r} invalid; "
                 f"expected one of {FLOW_MODES}"
             )
+        else:
+            pass
         self.flow_mode: FlowMode = flow_mode
         # Post-init side-path warmup (patch_encoder / dit_head / stop_head /
         # spk_proj) on the assembly-line tail; the engine dummy run and the
@@ -94,13 +123,21 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         self.async_decode_min_batch_size = int(async_decode_min_batch_size)
         if min(self.n_timesteps, self.max_patches, self.max_running_requests) <= 0:
             raise ValueError("FireRedTTS3 batching limits must be positive")
+        else:
+            pass
         if self.flow_cuda_graph_max_graphs <= 0:
             raise ValueError("FireRedTTS3 flow_cuda_graph_max_graphs must be positive")
+        else:
+            pass
         if self.async_decode_min_batch_size <= 0:
             raise ValueError("FireRedTTS3 async_decode_min_batch_size must be positive")
-        self._model_runner: Any | None = None
-        self._flow_graphs: Any | None = None
-        self._flow_dit_stack: tuple[Any, Any] | None = None
+        else:
+            pass
+        self.model_runner: FireRedTTS3ModelRunner | None = None
+        self.flow_graphs: FlowGraphRunner | None = None
+        self.flow_dit_stack: (
+            tuple[torch.nn.Module | CompiledDiTExecutor, torch.nn.Module] | None
+        ) = None
 
     def pre_infra_setup(self, checkpoint_dir: str) -> None:
         del checkpoint_dir
@@ -110,7 +147,7 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
 
         register_fireredtts3_hf_config()
 
-    def generation_defaults(self, *, dtype: str) -> dict[str, Any]:
+    def generation_defaults(self, *, dtype: str) -> GenerationDefaults:
         return {
             # The decode CUDA graph replays the backbone step; the per-step
             # latent feedback reaches it through the model-owned persistent
@@ -132,14 +169,20 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
             "trust_remote_code": False,
         }
 
-    def adjust_overrides(self, overrides: dict[str, Any]) -> None:
+    def adjust_overrides(
+        self, overrides: dict[str, int | float | str | bool | None]
+    ) -> None:
         if int(overrides.get("tp_size", 1)) != 1:
             raise ValueError("FireRedTTS3 supports tp_size=1 only")
+        else:
+            pass
         requested = int(
             overrides.get("max_running_requests", self.max_running_requests)
         )
         if requested <= 0:
             raise ValueError("FireRedTTS3 max_running_requests must be positive")
+        else:
+            pass
         self.max_running_requests = requested
         overrides["disable_radix_cache"] = True
         overrides["chunked_prefill_size"] = 0
@@ -148,20 +191,24 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
                 "FireRedTTS3 compiles its flow side path directly; SGLang "
                 "backbone compile is disabled"
             )
+        else:
+            pass
         if not bool(overrides.get("disable_cuda_graph", True)):
             # The decode graph must be captured with hidden states (FULL); its
             # can_run gate requires an exact hidden-mode match with the
             # runner's per-step request.
             overrides["enable_return_hidden_states"] = True
+        else:
+            pass
 
     def setup_model(
         self,
         *,
-        model_worker: Any,
+        model_worker: ModelWorker,
         checkpoint_dir: str,
         device: str,
         gpu_id: int,
-        server_args: Any,
+        server_args: ServerArgs,
     ) -> None:
         del checkpoint_dir, device, gpu_id
         from sglang.srt.runtime_context import get_exec, get_schedule
@@ -177,6 +224,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         if bool(get_exec().graph.disable_cuda_graph):
             logger.info("FireRedTTS3 backbone decode: eager")
             return
+        else:
+            pass
         from sglang_omni.scheduling.generation_batch_policy import (
             get_decode_cuda_graph_max_bs,
         )
@@ -198,7 +247,9 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
             "feedback buffer"
         )
 
-    def compile_model(self, model: Any, server_args: Any) -> None:
+    def compile_model(
+        self, model: FireRedTTS3SGLangModel, server_args: ServerArgs
+    ) -> None:
         """Build the flow mode's DiT stack, before any graph capture.
 
         The assembly line runs this hook before init_sglang_cuda_graphs and
@@ -216,9 +267,11 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
                 "CUDA graph is disabled"
             )
             return
+        else:
+            pass
         started = time.perf_counter()
         model.weights_locked = True
-        self._flow_dit_stack = prepare_flow_dit(model.dit, self.flow_mode)
+        self.flow_dit_stack = prepare_flow_dit(model.dit, self.flow_mode)
         logger.info(
             f"FireRedTTS3 flow mode {self.flow_mode}: DiT stack prepared in "
             f"{time.perf_counter() - started:.1f}s (lazy compile on capture)"
@@ -226,8 +279,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
 
     def setup_model_resources(
         self,
-        model: Any,
-        server_args: Any,
+        model: FireRedTTS3SGLangModel,
+        server_args: ServerArgs,
         *,
         generation_cuda_graph_enabled: bool,
     ) -> None:
@@ -246,8 +299,10 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         if self.warmup_on_init:
             model.warmup_side_path()
             logger.info("FireRedTTS3 talker side-path warmup complete")
+        else:
+            pass
 
-    def capture_flow_graphs(self, model: Any) -> None:
+    def capture_flow_graphs(self, model: FireRedTTS3SGLangModel) -> None:
         """Pre-capture the flow-loop CUDA graphs for the hot batch buckets."""
         from sglang.srt.runtime_context import get_schedule
 
@@ -258,8 +313,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
         )
 
         dit, dit_fallback = (
-            self._flow_dit_stack
-            if self._flow_dit_stack is not None
+            self.flow_dit_stack
+            if self.flow_dit_stack is not None
             else (model.dit, model.dit)
         )
         device = next(model.dit.parameters()).device
@@ -268,6 +323,8 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
                 "FireRedTTS3 flow CUDA graph needs a CUDA device; staying eager"
             )
             return
+        else:
+            pass
         cond_channels = int(model.config.dit_hidden_size) + int(
             model.config.spk_in_dim or 0
         )
@@ -310,7 +367,9 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
                     "the flow side path stays eager"
                 )
                 return
-        self._flow_graphs = runner
+            else:
+                pass
+        self.flow_graphs = runner
         reserved_mib = (torch.cuda.memory_reserved(device) - reserved_before) / 2**20
         logger.info(
             f"FireRedTTS3 flow CUDA graphs captured: sizes={sizes} "
@@ -318,20 +377,24 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
             f"in {time.perf_counter() - started:.1f}s"
         )
 
-    def make_model_runner(self, model_worker: Any, output_proc: Any) -> Any:
+    def make_model_runner(
+        self, model_worker: ModelWorker, output_proc: SGLangOutputProcessor
+    ) -> FireRedTTS3ModelRunner:
         from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
 
-        self._model_runner = FireRedTTS3ModelRunner(
+        self.model_runner = FireRedTTS3ModelRunner(
             model_worker,
             output_proc,
-            flow_graphs=self._flow_graphs,
+            flow_graphs=self.flow_graphs,
             flow_batching=self.flow_batching,
             control_token_fastpath=self.control_token_fastpath,
             skip_min_patch_stop=self.skip_min_patch_stop,
         )
-        return self._model_runner
+        return self.model_runner
 
-    def make_adapters(self, model: Any) -> tuple[Any, Any]:
+    def make_adapters(
+        self, model: FireRedTTS3SGLangModel
+    ) -> tuple[FireRedRequestBuilder, FireRedResultAdapter]:
         from transformers import AutoTokenizer
 
         from sglang_omni.models.firered_tts3.request_builders import (
@@ -353,7 +416,7 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
             (int(raw_ratio[0]), int(raw_ratio[1])) if raw_ratio is not None else None
         )
 
-        def _build_request(payload: Any) -> Any:
+        def _build_request(payload: StagePayload) -> FireRedTTS3SGLangRequestData:
             return build_sglang_firered_tts3_request(
                 payload,
                 patch_size=model.patch_size,
@@ -361,16 +424,16 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder):
                 interleave_ratio=interleave_ratio,
             )
 
-        def _apply_result(data: Any) -> Any:
+        def _apply_result(data: FireRedTTS3SGLangRequestData) -> StagePayload:
             return apply_latent_result(data, text_tokenizer=text_tokenizer)
 
         return _build_request, _apply_result
 
-    def make_abort_callback(self) -> Any | None:
-        assert self._model_runner is not None
-        return self._model_runner.reset_request
+    def make_abort_callback(self) -> FireRedAbortCallback | None:
+        assert self.model_runner is not None
+        return self.model_runner.reset_request
 
-    def extra_scheduler_kwargs(self) -> dict[str, Any]:
+    def extra_scheduler_kwargs(self) -> SchedulerExtras[FireRedTTS3SGLangRequestData]:
         from sglang_omni.models.firered_tts3.request_builders import build_stream_output
 
         return {

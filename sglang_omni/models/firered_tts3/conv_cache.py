@@ -50,8 +50,12 @@ class Conv1dWeightCache(TorchDispatchMode):
                     packed=source.unsqueeze(2).contiguous(
                         memory_format=torch.channels_last
                     ),
-                    version=None if torch.is_inference(weight) else weight._version,
+                    version=(
+                        None if torch.is_inference(weight) else weight._version
+                    ),  # noqa: leading-underscore  # PyTorch tensor version API
                 )
+            else:
+                pass
         self.version_checks_available = all(
             entry.version is not None for entry in self.weights.values()
         )
@@ -63,7 +67,9 @@ class Conv1dWeightCache(TorchDispatchMode):
         """Check weights before capture; live weight updates require a new worker."""
         for pointer, entry in self.weights.items():
             current = self.module.get_parameter(entry.name)
-            version = None if torch.is_inference(current) else current._version
+            version = (
+                None if torch.is_inference(current) else current._version
+            )  # noqa: leading-underscore  # PyTorch tensor version API
             if (
                 current.data_ptr() != pointer
                 or current.shape != entry.source.shape
@@ -75,6 +81,8 @@ class Conv1dWeightCache(TorchDispatchMode):
                 raise RuntimeError(
                     f"Convolution weight changed; rebuild cache: {entry.name}"
                 )
+            else:
+                pass
 
     def __torch_dispatch__(
         self,
@@ -88,6 +96,8 @@ class Conv1dWeightCache(TorchDispatchMode):
             torch.ops.aten.conv1d.default,
         ):
             return func(*args, **(kwargs or {}))
+        else:
+            pass
         if func is torch.ops.aten.conv1d.default:
             names = (
                 "input",
@@ -127,6 +137,8 @@ class Conv1dWeightCache(TorchDispatchMode):
         if entry is None:
             self.misses += 1
             return func(*args, **(kwargs or {}))
+        else:
+            pass
         expected = entry.source if weight.ndim == 3 else entry.source.unsqueeze(2)
         if (
             weight.shape != expected.shape
@@ -141,9 +153,13 @@ class Conv1dWeightCache(TorchDispatchMode):
         ):
             self.misses += 1
             return func(*args, **(kwargs or {}))
+        else:
+            pass
         if fields["transposed"] or any(cast(Sequence[int], fields["output_padding"])):
             self.misses += 1
             return func(*args, **(kwargs or {}))
+        else:
+            pass
         stride = list(cast(Sequence[int], fields["stride"]))
         padding = list(cast(Sequence[int], fields["padding"]))
         dilation = list(cast(Sequence[int], fields["dilation"]))
@@ -177,6 +193,8 @@ class Conv1dWeightCache(TorchDispatchMode):
             # note (Codex): preserve the NCHW reduction plan for this NHWC shape.
             if self.controlled_plan is None:
                 self.controlled_plan = ControlledConvPlan(inputs, entry.packed)
+            else:
+                pass
             result = self.controlled_plan(inputs, entry.packed)
         else:
             result = torch.ops.aten.convolution.default(

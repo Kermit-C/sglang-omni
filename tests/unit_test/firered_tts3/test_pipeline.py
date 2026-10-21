@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
 
 import pytest
 import torch
@@ -220,9 +219,7 @@ def test_firered_tts3_state_defaults_round_trip() -> None:
 def test_firered_tts3_preprocessing_factory_builds() -> None:
     from sglang_omni.models.firered_tts3 import stages
 
-    scheduler = stages.create_preprocessing_executor(
-        str(BASE_CHECKPOINT)
-    )
+    scheduler = stages.create_preprocessing_executor(str(BASE_CHECKPOINT))
     assert scheduler is not None
 
 
@@ -233,9 +230,7 @@ def test_firered_tts3_preprocessing_factory_builds() -> None:
 def test_firered_tts3_preprocessing_factory_builds_instruct() -> None:
     from sglang_omni.models.firered_tts3 import stages
 
-    scheduler = stages.create_preprocessing_executor(
-        str(INSTRUCT_CHECKPOINT)
-    )
+    scheduler = stages.create_preprocessing_executor(str(INSTRUCT_CHECKPOINT))
     assert scheduler is not None
 
 

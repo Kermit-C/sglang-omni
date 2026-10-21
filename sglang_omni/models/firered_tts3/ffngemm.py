@@ -49,8 +49,12 @@ class FfnWeight:
             bias_pointer=bias.data_ptr(),
             device=weight.device,
             output_size=weight.shape[0],
-            version=None if torch.is_inference(weight) else weight._version,
-            bias_version=None if torch.is_inference(bias) else bias._version,
+            version=(
+                None if torch.is_inference(weight) else weight._version
+            ),  # noqa: leading-underscore  # PyTorch tensor version API
+            bias_version=(
+                None if torch.is_inference(bias) else bias._version
+            ),  # noqa: leading-underscore  # PyTorch tensor version API
         )
 
 
@@ -145,6 +149,8 @@ class FfnGemmMode(TorchDispatchMode):
             with torch.cuda.device(device):
                 if torch.cuda.is_current_stream_capturing():
                     raise RuntimeError("Packed QKV must be prepared before capture")
+                else:
+                    pass
             self.validate_weights()
             attentions = [
                 (name, layer)
@@ -157,6 +163,8 @@ class FfnGemmMode(TorchDispatchMode):
                 raise RuntimeError(
                     "Packed QKV requires eleven original DiT Attention layers"
                 )
+            else:
+                pass
             for name, attention in attentions:
                 for role in ("to_q", "to_k", "to_v"):
                     layer = attention.get_submodule(role)
@@ -174,6 +182,8 @@ class FfnGemmMode(TorchDispatchMode):
                         raise RuntimeError(
                             f"Unsupported packed QKV parameters: {name}.{role}"
                         )
+                    else:
+                        pass
             packed_qkv = PackedQkvModel(self.source)
             packed_weights = {
                 packed.to_qkv.weight.data_ptr(): FfnWeight.from_linear(
@@ -209,16 +219,24 @@ class FfnGemmMode(TorchDispatchMode):
             entry.bias.record_stream(stream)
         if self.packed_qkv is not None:
             self.packed_qkv.record_stream(stream)
+        else:
+            pass
 
     def validate_weights(self) -> None:
         """Validate cached parameters before capturing a new graph."""
         if self.packed_qkv is not None:
             self.packed_qkv.validate_weights()
+        else:
+            pass
         for pointer, entry in self.weights.items():
             current = self.source.get_parameter(entry.name)
             bias = self.source.get_parameter(entry.name.removesuffix("weight") + "bias")
-            version = None if torch.is_inference(current) else current._version
-            bias_version = None if torch.is_inference(bias) else bias._version
+            version = (
+                None if torch.is_inference(current) else current._version
+            )  # noqa: leading-underscore  # PyTorch tensor version API
+            bias_version = (
+                None if torch.is_inference(bias) else bias._version
+            )  # noqa: leading-underscore  # PyTorch tensor version API
             if (
                 current is not entry.source
                 or bias is not entry.bias
@@ -238,6 +256,8 @@ class FfnGemmMode(TorchDispatchMode):
                 raise RuntimeError(
                     f"DiT GEMM weights changed; rebuild mode: {entry.name}"
                 )
+            else:
+                pass
 
     def __torch_dispatch__(
         self,

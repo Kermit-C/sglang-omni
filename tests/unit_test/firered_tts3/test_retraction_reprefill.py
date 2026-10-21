@@ -65,7 +65,7 @@ class ReplayModel(torch.nn.Module):
 
 def make_runner(*, batching: bool = False) -> FireRedTTS3ModelRunner:
     runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    runner._async_enabled = False
+    runner.async_enabled = False
     runner.active_requests = {}
     runner.model = ReplayModel()
     runner.flow_batching = batching

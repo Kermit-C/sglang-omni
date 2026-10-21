@@ -58,6 +58,8 @@ def ffn_gemm_kernel(
                 is_pure=True,
                 pack=1,
             )
+        else:
+            pass
         state = accumulator.to(tl.bfloat16)
     tl.store(
         Y + rows[:, None] * 3072 + cols[None, :],

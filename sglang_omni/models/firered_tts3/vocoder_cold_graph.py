@@ -133,15 +133,21 @@ class RedAEVocoderColdGraphRunner:
         """Capture the configured grid; call at warmup time, never per request."""
         if not self.enabled:
             return
+        else:
+            pass
         for batch_size in sorted(self.batch_sizes, reverse=True):
             for latent_size in sorted(self.latent_sizes, reverse=True):
                 key = (latent_size, batch_size)
                 if key in self.graphs or key in self.failed_keys:
                     continue
+                else:
+                    pass
                 entry = self.capture(latent_size, batch_size)
                 if entry is None:
                     self.failed_keys.add(key)
                     continue
+                else:
+                    pass
                 self.graphs[key] = entry
                 self.counters["captures"] += 1
         if not self.graphs:
@@ -150,6 +156,8 @@ class RedAEVocoderColdGraphRunner:
                 "FireRedTTS3 vocoder cold CUDA graphs: no key captured; eager only"
             )
             return
+        else:
+            pass
         logger.info(
             f"FireRedTTS3 vocoder cold CUDA graphs captured: {sorted(self.graphs)}"
             + (f" (skipped: {sorted(self.failed_keys)})" if self.failed_keys else "")
@@ -255,8 +263,12 @@ class RedAEVocoderColdGraphRunner:
                     layer.cumulative_length = 0
                 if self.graph_pool is None:
                     self.graph_pool = torch.cuda.graph_pool_handle()
+                else:
+                    pass
                 if self.capture_stream is None:
                     self.capture_stream = torch.cuda.Stream(device=self.device)
+                else:
+                    pass
                 graph = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(
                     graph,
@@ -298,15 +310,23 @@ class RedAEVocoderColdGraphRunner:
             or lead_samples < self.min_lead_samples
         ):
             return None
+        else:
+            pass
         batch_size, latent_size = int(latents.shape[0]), int(latents.shape[1])
         if latent_size < self.min_latents:
             return None
+        else:
+            pass
         bucket = next((size for size in self.batch_sizes if size >= batch_size), None)
         if bucket is None:
             return None
+        else:
+            pass
         width = next((size for size in self.latent_sizes if size >= latent_size), None)
         if width is None:
             return None
+        else:
+            pass
         return self.graphs.get((width, bucket))
 
     def run(
@@ -324,6 +344,8 @@ class RedAEVocoderColdGraphRunner:
         if entry is None:
             self.counters["eager"] += 1
             return None
+        else:
+            pass
         batch_size, latent_size = int(latents.shape[0]), int(latents.shape[1])
         width = int(entry.latents.shape[1])
         upsample = int(self.decoder.upsample_rate)
@@ -335,6 +357,8 @@ class RedAEVocoderColdGraphRunner:
                 entry.latents[:batch_size, width - latent_size :, :].copy_(latents)
                 if pad_frames:
                     entry.positions[0, :pad_frames].zero_()
+                else:
+                    pass
                 torch.arange(
                     real_frames,
                     dtype=torch.long,

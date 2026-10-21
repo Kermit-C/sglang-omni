@@ -135,6 +135,8 @@ def convert_to_chatml(
         input_message["content"].insert(
             0, {"type": "audio", "audio": CHATML_LATENT_IN_PAD_SYM * latent_in_len}
         )
+    else:
+        pass
     messages.append(input_message)
     output_message = {
         "role": "assistant",
@@ -144,6 +146,8 @@ def convert_to_chatml(
         output_message["content"].append(
             {"type": "audio", "audio": CHATML_LATENT_OUT_PAD_SYM * latent_out_len}
         )
+    else:
+        pass
     messages.append(output_message)
 
     chatml_str_list: list[str] = []
@@ -153,6 +157,8 @@ def convert_to_chatml(
                 f'<|im_start|>{msg["role"]}\n{msg["content"]}<|im_end|>\n'
             )
             continue
+        else:
+            pass
         chatml_str_list.append(f'<|im_start|>{msg["role"]}\n')
         for content in msg["content"]:
             if content["type"] == "text":
@@ -196,8 +202,12 @@ def compose_acoustic_instruction(attribute: str, value: float) -> str:
     """Acoustic edits only accept the templates the model was trained on."""
     if attribute == "Speed":
         return f"adjust the speed to {value:.1f}x"
+    else:
+        pass
     if attribute == "Volume":
         return f"adjust the volume to {value:.1f}"
+    else:
+        pass
     steps = int(round(value))
     return f"shift the pitch by {steps} step{'' if abs(steps) == 1 else 's'}"
 
@@ -249,6 +259,8 @@ def compose_speaker_chatml(
                 f"FireRedTTS3 interleave_ratio {interleave_ratio!r} invalid; "
                 "expected [text_steps, audio_steps] with both >= 1"
             )
+        else:
+            pass
         # One placeholder group (1 real text slot + pads + audio slots),
         # exactly what the reference's compose_interleave(text_len=1,
         # latent_len=1) yields for the ratio — then stripped whole.
@@ -332,12 +344,16 @@ def encode_speaker_text(tokenizer, text: str) -> list[int]:
         if len(decoded) < 2 or not all(is_cjk_char(c) for c in decoded):
             out.append(int(tid))
             continue
+        else:
+            pass
         char_ids: list[int] = []
         for ch in decoded:
             ids = tokenizer(ch, add_special_tokens=False)["input_ids"]
             if unk is not None and unk in ids:
                 char_ids = []
                 break
+            else:
+                pass
             char_ids.extend(int(i) for i in ids)
         if char_ids:
             out.extend(char_ids)
@@ -356,6 +372,8 @@ def resolve_speaker_token_id(tokenizer, token: str) -> int:
             f"{token} token — this model's tokenizer has none (the speaker "
             "variant is a separate checkpoint)"
         )
+    else:
+        pass
     return int(tid)
 
 
@@ -377,6 +395,8 @@ def load_audio(path: str) -> tuple[torch.Tensor, int]:
     wav_np, sr = sf.read(audio_obj, dtype="float32")
     if wav_np.ndim > 1:
         wav_np = wav_np.mean(axis=1)
+    else:
+        pass
     return torch.from_numpy(wav_np), int(sr)
 
 
@@ -392,9 +412,13 @@ def count_latent_patches(wav: torch.Tensor, sr: int) -> tuple[torch.Tensor, int]
 
     if wav.ndim == 1:
         wav = wav.unsqueeze(0)
+    else:
+        pass
     wav = wav[:1].float()
     if sr != SAMPLE_RATE:
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
+    else:
+        pass
     multiple = SAMPLE_RATE // LATENT_HZ * PATCH_FRAMES  # 3840 samples/patch
     return wav, math.ceil(wav.shape[1] / multiple)
 
@@ -420,6 +444,8 @@ def encode_speaker_prefill_ids(
     text_ids = encode_speaker_text(tokenizer, text)
     if not text_ids:
         raise ValueError("FireRedTTS3 speaker text encoded to zero tokens")
+    else:
+        pass
     chatml = compose_speaker_chatml(
         speaker_token,
         style="" if style is None else style,
@@ -440,6 +466,8 @@ def encode_speaker_prefill_ids(
             f"FireRedTTS3 speaker template carries {fed} text slots "
             f"for {len(text_ids)} text tokens — composition bug"
         )
+    else:
+        pass
     return prompt_ids
 
 
@@ -460,9 +488,13 @@ def encode_speaker_dual_stream_prompt(
     """
     if not text.strip():
         raise ValueError("FireRedTTS3 speaker requests require non-empty text")
+    else:
+        pass
     text_ids = encode_speaker_text(tokenizer, text)
     if not text_ids:
         raise ValueError("FireRedTTS3 speaker text encoded to zero tokens")
+    else:
+        pass
     chatml = compose_speaker_chatml(
         speaker_token,
         style="Use a 中性 tone." if style is None else style,
@@ -488,6 +520,8 @@ def speaker_max_tokens(
     """
     if interleave_ratio is None:
         return int(max_patches) + slack
+    else:
+        pass
     nt, na = interleave_ratio
     per_patch = (int(nt) + int(na)) / int(na)
     return int(math.ceil(per_patch * int(max_patches))) + slack
@@ -512,4 +546,6 @@ def task_sampling_kwargs(task: str, seed: int | None = None) -> dict[str, Any]:
         kw = {"temperature": 0.0}
     if seed is not None:
         kw["seed"] = seed
+    else:
+        pass
     return kw

@@ -65,6 +65,8 @@ def build_initialized_cache(
             config.sliding_window, dtype=torch.long, device=device
         )
         _WINDOW_SCALARS[device] = window_scalar
+    else:
+        pass
     empty = torch.zeros(0, dtype=dtype, device=device)
     for layer in cache.layers:
         layer.dtype, layer.device = dtype, device
@@ -72,7 +74,9 @@ def build_initialized_cache(
         layer.values = empty
         layer.is_initialized = True
         if hasattr(layer, "_sliding_window_tensor"):
-            layer._sliding_window_tensor = window_scalar
+            layer._sliding_window_tensor = window_scalar  # noqa: leading-underscore  # Transformers cache attribute
+        else:
+            pass
     return cache
 
 
@@ -175,6 +179,8 @@ class RedAEAudioDecoder(torch.nn.Module):
                     dtype=self.in_proj.weight.dtype,
                 )
             )
+        else:
+            pass
         # Upsample
         xs = self.in_proj(xs)  # (b, t, upsample_rate, c)
         xs = xs.reshape(
@@ -206,6 +212,8 @@ class RedAEAudioDecoder(torch.nn.Module):
         """
         if cache.istft_cache is None:
             raise RuntimeError("RedAE flush_stream requires a decoded chunk first")
+        else:
+            pass
         return self.istft_head.istft.flush_stream(cache.istft_cache)
 
     # Equal-progress batch merge/split (vocoder request batching).
@@ -234,6 +242,8 @@ class RedAEAudioDecoder(torch.nn.Module):
             )
             if hasattr(layer, "cumulative_length"):
                 layer.cumulative_length = first.cumulative_length
+            else:
+                pass
         merged = RedAEDecoderState(merged_cache)
         # iSTFT OLA tail: fixed (B, n_fft//2+1, win//hop-1), progress-free.
         merged.istft_cache = torch.cat([s.istft_cache for s in states], dim=0)

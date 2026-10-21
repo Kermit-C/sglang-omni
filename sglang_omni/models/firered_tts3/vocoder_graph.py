@@ -138,15 +138,21 @@ class RedAEVocoderGraphRunner:
         """Capture the configured grid; call at warmup time, never per request."""
         if not self.enabled:
             return
+        else:
+            pass
         for batch_size in sorted(self.batch_sizes, reverse=True):
             for latent_size in sorted(self.latent_sizes, reverse=True):
                 key = (latent_size, batch_size)
                 if key in self.graphs or key in self.failed_keys:
                     continue
+                else:
+                    pass
                 entry = self.capture(latent_size, batch_size)
                 if entry is None:
                     self.failed_keys.add(key)
                     continue
+                else:
+                    pass
                 self.graphs[key] = entry
                 self.counters["captures"] += 1
         if not self.graphs:
@@ -155,6 +161,8 @@ class RedAEVocoderGraphRunner:
                 "FireRedTTS3 vocoder CUDA graphs: no key captured; eager only"
             )
             return
+        else:
+            pass
         logger.info(
             f"FireRedTTS3 vocoder CUDA graphs captured: {sorted(self.graphs)}"
             + (f" (skipped: {sorted(self.failed_keys)})" if self.failed_keys else "")
@@ -191,6 +199,8 @@ class RedAEVocoderGraphRunner:
                 ),
             )
             self.buckets[batch_size] = buffers
+        else:
+            pass
         return buffers
 
     def capture(self, latent_size: int, batch_size: int) -> VocoderGraphEntry | None:
@@ -267,8 +277,12 @@ class RedAEVocoderGraphRunner:
                     layer.values = buffers.kv_in[2 * index + 1]
                 if self.graph_pool is None:
                     self.graph_pool = torch.cuda.graph_pool_handle()
+                else:
+                    pass
                 if self.capture_stream is None:
                     self.capture_stream = torch.cuda.Stream(device=self.device)
+                else:
+                    pass
                 graph = torch.cuda.CUDAGraph()
                 # thread_local: colocated stages may keep using CUDA on other
                 # threads while this capture records.
@@ -307,13 +321,19 @@ class RedAEVocoderGraphRunner:
             or torch.cuda.is_current_stream_capturing()
         ):
             return None
+        else:
+            pass
         batch_size, latent_size = int(latents.shape[0]), int(latents.shape[1])
         bucket = next((size for size in self.batch_sizes if size >= batch_size), None)
         if bucket is None:
             return None
+        else:
+            pass
         entry = self.graphs.get((latent_size, bucket))
         if entry is None or state.qwen3_cache is None or state.istft_cache is None:
             return None
+        else:
+            pass
         keys = state.qwen3_cache.layers[0].keys
         if (
             keys is None
@@ -323,6 +343,8 @@ class RedAEVocoderGraphRunner:
         ):
             # Ramp-up (stored window not yet full) stays eager.
             return None
+        else:
+            pass
         return entry
 
     def run(
@@ -339,6 +361,8 @@ class RedAEVocoderGraphRunner:
         if entry is None:
             self.counters["eager"] += 1
             return None
+        else:
+            pass
         batch_size = int(latents.shape[0])
         bucket = int(entry.latents.shape[0])
         buffers = entry.buffers

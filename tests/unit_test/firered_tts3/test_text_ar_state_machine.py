@@ -40,7 +40,7 @@ from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputP
 
 def make_runner() -> FireRedTTS3ModelRunner:
     runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    runner._async_enabled = False
+    runner.async_enabled = False
     runner.active_requests = {}
     runner.t_span_cache = {}
     runner.flow_calls = 0
@@ -301,7 +301,7 @@ def test_control_fastpath_preserves_other_token_paths(
 ) -> None:
     runner = make_runner()
     runner.control_token_fastpath = enabled
-    runner._async_enabled = async_enabled
+    runner.async_enabled = async_enabled
     request = make_request("tts")
     request.data.state.variant = variant
     request.data.dual_stream = dual_stream
@@ -341,7 +341,7 @@ def test_min_patch_stop_boundary_is_unchanged(
     runner = make_runner()
     if skip is not None:
         runner.skip_min_patch_stop = skip
-    runner._async_enabled = async_enabled
+    runner.async_enabled = async_enabled
     request = make_request("tts")
     data = request.data
     data.state.variant = variant

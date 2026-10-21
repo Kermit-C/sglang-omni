@@ -77,6 +77,8 @@ def load_checkpoint_hf_config(model_path: str) -> FireRedTTS3Config | None:
     config_path = Path(model_path).expanduser() / "config.json"
     if not config_path.is_file():
         return None
+    else:
+        pass
     with config_path.open(encoding="utf-8") as handle:
         return FireRedTTS3Config(**json.load(handle))
 
@@ -156,6 +158,8 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
         # validates.
         if self.variant == "speaker":
             return 0
+        else:
+            pass
         return None if self.variant == "instruct" else 1
 
     @property
@@ -171,10 +175,12 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
         # the reference transcript; edit tasks never carry one.
         return self.variant not in ("instruct", "speaker")
 
-    def model_post_init(self, __context: Any = None) -> None:
+    def model_post_init(self, __context: dict[str, str] | None = None) -> None:
         super().model_post_init(__context)
         if any(stage.tp_size != 1 for stage in self.stages):
             raise ValueError("FireRedTTS3 currently supports tp_size=1 only")
+        else:
+            pass
         checkpoint_config = load_checkpoint_hf_config(self.model_path)
         if checkpoint_config is not None:
             detected = detect_fireredtts3_variant(checkpoint_config)
@@ -183,9 +189,15 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
                     f"pinned variant {self.variant!r} disagrees with checkpoint "
                     f"{self.model_path!r} (detected {detected!r})"
                 )
+            else:
+                pass
             self.variant = detected
+        else:
+            pass
         if self.variant == "speaker":
             self.drop_reference_encode_stage()
+        else:
+            pass
         # The talker owns the generation schedule (ODE steps and patch
         # budget); preprocessing only derives from it, so a preprocessing
         # value that conflicts with the talker value is refused. Unset
@@ -206,6 +218,8 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
                     f"configure only talker.factory.{key} and let "
                     "preprocessing derive it, or set both to the same value"
                 )
+            else:
+                pass
         # stream_slots must match backbone concurrency so a
         # max_running_requests override cannot outrun vocoder admission. A
         # pinned value that disagrees is refused; an unset value is derived
@@ -220,17 +234,25 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
                     f"must equal talker max_running_requests ({derived}); "
                     "omit stream_slots to derive it from the talker"
                 )
+            else:
+                pass
+        else:
+            pass
 
     def drop_reference_encode_stage(self) -> None:
         """Remove the reference_encode stage and rewire preprocessing."""
         if all(stage.name != "reference_encode" for stage in self.stages):
             return
+        else:
+            pass
         self.stages = [
             stage for stage in self.stages if stage.name != "reference_encode"
         ]
         preprocessing = self.stage_named("preprocessing")
         if preprocessing.next == "reference_encode":
             preprocessing.next = "talker"
+        else:
+            pass
         self.validate_general()
 
     def talker_generation_limits(self) -> tuple[int, int]:
@@ -248,12 +270,16 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
         if stage_name == "preprocessing":
             n_timesteps, max_patches = self.talker_generation_limits()
             return {"n_timesteps": n_timesteps, "max_patches": max_patches}
+        else:
+            pass
         if stage_name == "vocoder":
             return {
                 "stream_slots": self.talker_max_running_requests(
                     self.stage_named("talker")
                 )
             }
+        else:
+            pass
         return {}
 
     @staticmethod
@@ -262,6 +288,8 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
         value = engine.max_running_requests if engine is not None else None
         if value is None:
             return DEFAULT_MAX_RUNNING_REQUESTS
+        else:
+            pass
         return int(value)
 
     @classmethod

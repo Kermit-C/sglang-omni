@@ -32,6 +32,8 @@ def validate_tensors(inputs: torch.Tensor, weight: torch.Tensor) -> None:
         or weight.data_ptr() % TENSOR_ALIGNMENT
     ):
         raise RuntimeError("Unsupported controlled convolution tensor metadata")
+    else:
+        pass
 
 
 class ControlledConvPlan:
@@ -44,6 +46,8 @@ class ControlledConvPlan:
                 raise RuntimeError(
                     "Controlled convolution must be prepared before capture"
                 )
+            else:
+                pass
         if (
             not torch.backends.cudnn.enabled
             or torch.backends.cudnn.deterministic
@@ -52,11 +56,15 @@ class ControlledConvPlan:
             raise RuntimeError(
                 "Controlled convolution requires default cuDNN determinism settings"
             )
+        else:
+            pass
         if (
             torch.cuda.get_device_capability(inputs.device) != (12, 0)
             or torch.backends.cudnn.version() != CUDNN_VERSION
         ):
             raise RuntimeError("Controlled convolution requires SM120 and cuDNN 9.20")
+        else:
+            pass
         try:
             import cudnn
         except ImportError as error:
@@ -70,6 +78,8 @@ class ControlledConvPlan:
             raise RuntimeError(
                 f"Controlled convolution requires frontend {FRONTEND_VERSION} and cuDNN 9.20"
             )
+        else:
+            pass
         self.frontend = cudnn
         self.device = inputs.device
         with torch.cuda.device(self.device):
@@ -116,6 +126,8 @@ class ControlledConvPlan:
         validate_tensors(inputs, weight)
         if inputs.device != self.device:
             raise RuntimeError("Controlled convolution plan belongs to another device")
+        else:
+            pass
         with torch.cuda.device(self.device):
             stream = torch.cuda.current_stream(self.device)
             self.frontend.set_stream(self.handle, stream.cuda_stream)

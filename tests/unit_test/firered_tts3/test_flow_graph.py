@@ -21,7 +21,6 @@ from __future__ import annotations
 import collections
 import gc
 import weakref
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -294,7 +293,7 @@ def test_flow_step_graph_matches_eager(device) -> None:
         )
 
     runner = object.__new__(FireRedTTS3ModelRunner)
-    runner._async_enabled = False
+    runner.async_enabled = False
     runner.model = model
     runner.t_span_cache = {}
     eager_data = make_data()
@@ -577,7 +576,7 @@ def test_explicit_time_cache_protects_original_compiled_call(
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
     monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
-    config = torch._dynamo.config
+    config = torch._dynamo.config  # noqa: leading-underscore  # PyTorch compiler API
     observed: list[tuple[int, bool, bool]] = []
 
     def config_state() -> tuple[int, bool, bool]:

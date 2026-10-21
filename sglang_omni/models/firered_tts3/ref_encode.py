@@ -38,7 +38,7 @@ from sglang_omni.preprocessing.cache_key import (
     reference_path_cache_key,
 )
 from sglang_omni.proto import StagePayload
-from sglang_omni.scheduling.messages import OutgoingMessage
+from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.reference_encoder import (
     KeyedReferenceEncodeHook,
     ReferenceEncodeService,
@@ -93,10 +93,14 @@ class FireRedReferenceBundle:
             # Edit sources are capped by the reference gradio contract; the
             # preprocessing stage counts pad slots on the same capped length.
             audio = audio[:, : int(self.sample_rate * max_seconds)]
+        else:
+            pass
         target = -(-int(audio.shape[-1]) // self.pad_multiple) * self.pad_multiple
         pad_len = target - int(audio.shape[-1])
         if pad_len > 0:
             audio = torch.nn.functional.pad(audio, (pad_len, 0))
+        else:
+            pass
         return audio
 
     @torch.no_grad()
@@ -121,6 +125,8 @@ class FireRedReferenceBundle:
         }
         if spk_emb is not None:
             artifact["speaker_embedding"] = spk_emb.cpu()
+        else:
+            pass
         return artifact
 
     def warmup(self) -> None:
@@ -137,11 +143,15 @@ class FireRedReferenceBundle:
         with self.lock, torch.no_grad():
             if self.spk_extractor is not None:
                 self.spk_extractor(audio, self.sample_rate)
+            else:
+                pass
             # Reference encodes under bf16 autocast; warm that exact path.
             with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
                 self.encoder(audio)
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
+        else:
+            pass
         logger.info("FireRedTTS3 reference encoders warmup complete")
 
 
@@ -168,6 +178,8 @@ class FireRedReferenceHook(KeyedReferenceEncodeHook[tuple, dict, dict]):
     def input_key(self, item: tuple) -> str | None:
         if not self.cache_enabled:
             return None
+        else:
+            pass
         path, _cap_seconds = item
         return reference_path_cache_key(path, trust_stat=False) or hash_media_item(path)
 
@@ -230,6 +242,8 @@ class FireRedReferenceEncoder:
             # waveform prefix (left_context_size x 960 samples) from the
             # decoded output.
             state.left_context_size = int(state.prompt_latents.shape[1])
+        else:
+            pass
         if state.audio_in_path is not None:
             # The edit source scatters into the prompt's image_pad slots; it
             # is not ICL context (no left-context trim, no prompt streaming).
@@ -238,6 +252,8 @@ class FireRedReferenceEncoder:
                 desc=repr(state.audio_in_path),
             )
             state.audio_in_latents = artifact["prompt_latents"]
+        else:
+            pass
         return store_firered_tts3_state(payload, state)
 
 
@@ -252,9 +268,13 @@ def prompt_stream_message(payload: StagePayload) -> OutgoingMessage | None:
     params = payload.request.params
     if not isinstance(params, dict) or not params.get("stream"):
         return None
+    else:
+        pass
     state = load_firered_tts3_state(payload)
     if state.prompt_latents is None or state.prompt_latents.numel() == 0:
         return None
+    else:
+        pass
     return OutgoingMessage(
         request_id=payload.request_id,
         type="stream",

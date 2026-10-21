@@ -64,6 +64,8 @@ class RMSNorm(nn.Module):
         if self.native_rms_norm:
             if self.weight.dtype in [torch.float16, torch.bfloat16]:
                 x = x.to(self.weight.dtype)
+            else:
+                pass
             x = F.rms_norm(
                 x, normalized_shape=(x.shape[-1],), weight=self.weight, eps=self.eps
             )
@@ -72,6 +74,8 @@ class RMSNorm(nn.Module):
             x = x * torch.rsqrt(variance + self.eps)
             if self.weight.dtype in [torch.float16, torch.bfloat16]:
                 x = x.to(self.weight.dtype)
+            else:
+                pass
             x = x * self.weight
 
         return x
@@ -109,6 +113,8 @@ class Attention(nn.Module):
             raise ImportError(
                 "Attention requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0."
             )
+        else:
+            pass
 
         self.dim = dim
         self.heads = heads
@@ -152,6 +158,8 @@ class Attention(nn.Module):
             )
             query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
             key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
+        else:
+            pass
 
         x = F.scaled_dot_product_attention(
             query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False
@@ -165,6 +173,8 @@ class Attention(nn.Module):
         if mask is not None:
             mask = mask.unsqueeze(-1)
             x = x.masked_fill(~mask, 0.0)
+        else:
+            pass
 
         return x
 

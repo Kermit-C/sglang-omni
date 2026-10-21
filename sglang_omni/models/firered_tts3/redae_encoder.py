@@ -144,6 +144,8 @@ class RedAEAudioEncoder(torch.nn.Module):
                 num_attention_heads=num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
             )
+        else:
+            pass
         self.out_proj = nn.Linear(hidden_size, out_dim)
 
     @property
@@ -182,5 +184,7 @@ class RedAEAudioEncoder(torch.nn.Module):
         # Downsample
         if self.extra_downsample_rate > 1:
             xs = self.downsample(xs)
+        else:
+            pass
         xs = self.out_proj(xs)
         return xs

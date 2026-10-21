@@ -13,8 +13,6 @@ special case) must match the reference's full-segment decode.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn.functional as F

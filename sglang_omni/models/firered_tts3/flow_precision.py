@@ -41,6 +41,8 @@ class FlowPrecisionGate:
             math.isfinite(value) and value >= 0 for value in (self.atol, self.rtol)
         ):
             raise ValueError("Flow tolerances must be finite non-negative numbers")
+        else:
+            pass
 
     @classmethod
     def from_environment(cls) -> FlowPrecisionGate:

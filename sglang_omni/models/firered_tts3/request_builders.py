@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.models.firered_tts3.payload_types import (
     FireRedTTS3State,
@@ -42,8 +43,9 @@ from sglang_omni.models.firered_tts3.payload_types import (
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
 from sglang_omni.models.firered_tts3.prompt_utils import TEXT_PHASE_TASKS
 from sglang_omni.proto import StagePayload
-from sglang_omni.scheduling.messages import OutgoingMessage
+from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
+from sglang_omni.scheduling.types import RequestOutput
 
 # Inert in-vocab token id carried by next_token_ids / output_ids; the latent
 # loop never samples from the backbone vocab, and the runner overwrites the
@@ -117,6 +119,8 @@ def build_sglang_firered_tts3_request(
     state = load_firered_tts3_state(payload)
     if not state.input_ids:
         raise RuntimeError("FireRedTTS3 preprocessing did not produce input_ids")
+    else:
+        pass
     prompt_frames = (
         0 if state.prompt_latents is None else int(state.prompt_latents.shape[1])
     )
@@ -125,6 +129,8 @@ def build_sglang_firered_tts3_request(
             f"FireRedTTS3 prompt latents ({prompt_frames} frames) are not "
             f"aligned to the patch size ({patch_size})"
         )
+    else:
+        pass
     prompt_patch_count = prompt_frames // patch_size
     if state.variant in ("instruct", "speaker"):
         # Real chatml tokens: Instruct audio latents live INLINE as
@@ -144,11 +150,17 @@ def build_sglang_firered_tts3_request(
                 "FireRedTTS3 dual-stream requests require a checkpoint with "
                 "text_latent_interleave_ratio"
             )
+        else:
+            pass
         if not state.text_stream_ids or state.text_pad_id < 0:
             raise ValueError(
                 "FireRedTTS3 dual-stream requests require text_stream_ids and "
                 "text_pad_id from preprocessing"
             )
+        else:
+            pass
+    else:
+        pass
     max_engine_tokens = (
         state.max_engine_tokens or state.max_patches + ENGINE_TOKEN_SLACK
     )
@@ -162,12 +174,18 @@ def build_sglang_firered_tts3_request(
     )
     if state.text_top_p is not None:
         sampling_params.top_p = state.text_top_p
+    else:
+        pass
     if state.text_top_k is not None:
         sampling_params.top_k = state.text_top_k
+    else:
+        pass
     # The seeded engine sampler drives the text phase (the flow noise keeps
     # its own per-request generator seeded in the runner).
     if state.seed is not None and sampling_params.temperature > 0:
         sampling_params.sampling_seed = int(state.seed)
+    else:
+        pass
     sampling_params.normalize(None)
     sampling_params.verify(int(vocab_size))
     req = Req(
@@ -179,8 +197,12 @@ def build_sglang_firered_tts3_request(
         vocab_size=int(vocab_size),
     )
     req.tokenizer = None
-    req._input_embeds_are_projected = True
-    req._codec_suppress_tokens = None
+    req._input_embeds_are_projected = (
+        True  # noqa: leading-underscore  # SGLang request attribute
+    )
+    req._codec_suppress_tokens = (
+        None  # noqa: leading-underscore  # SGLang request attribute
+    )
     return FireRedTTS3SGLangRequestData(
         state=state,
         stage_payload=payload,
@@ -198,11 +220,14 @@ def build_sglang_firered_tts3_request(
 
 
 def apply_latent_result(
-    data: FireRedTTS3SGLangRequestData, text_tokenizer: Any = None
+    data: FireRedTTS3SGLangRequestData,
+    text_tokenizer: PreTrainedTokenizerBase | None = None,
 ) -> StagePayload:
     state = data.state
     if not data.latent_patches:
         raise RuntimeError("FireRedTTS3 generated no latent patches")
+    else:
+        pass
     state.generated_latents = torch.cat(data.latent_patches, dim=1)
     state.prompt_tokens = data.prefill_len
     state.completion_tokens = len(data.latent_patches)
@@ -212,6 +237,8 @@ def apply_latent_result(
         # The recorded text-phase tokens (EOT excluded, matching the
         # reference's text_gen_ids which never appends the terminator).
         state.gen_text = text_tokenizer.decode(data.text_token_ids)
+    else:
+        pass
     return store_firered_tts3_state(data.stage_payload, state)
 
 
@@ -230,6 +257,8 @@ def emit_latent_chunk(
         event = torch.cuda.Event()
         event.record()
         metadata["codes_ready_event"] = event
+    else:
+        pass
     return OutgoingMessage(
         request_id=request_id,
         type="stream",
@@ -242,7 +271,7 @@ def emit_latent_chunk(
 def build_stream_output(
     request_id: str,
     data: FireRedTTS3SGLangRequestData,
-    req_output: Any,
+    req_output: RequestOutput,
 ) -> list[OutgoingMessage]:
     """Ramp-sized latent chunks: 1 patch, then 2, then 4 at a time.
 
@@ -253,17 +282,25 @@ def build_stream_output(
     del req_output
     if not data.state.stream:
         return []
+    else:
+        pass
     if data.dual_stream:
         pending = len(data.latent_patches) - data.streamed_patches
         if pending < 1:
             return []
+        else:
+            pass
         return [emit_latent_chunk(request_id, data, 1)]
+    else:
+        pass
     ramp = STREAM_CHUNK_PATCH_RAMP[
         min(data.stream_chunk_index, len(STREAM_CHUNK_PATCH_RAMP) - 1)
     ]
     pending = len(data.latent_patches) - data.streamed_patches
     if pending < ramp:
         return []
+    else:
+        pass
     return [emit_latent_chunk(request_id, data, ramp)]
 
 
@@ -273,9 +310,13 @@ def flush_stream_output(
     """Terminal drain: everything the ramp held back reaches the vocoder."""
     if not data.state.stream:
         return []
+    else:
+        pass
     pending = len(data.latent_patches) - data.streamed_patches
     if pending <= 0:
         return []
+    else:
+        pass
     return [emit_latent_chunk(request_id, data, pending)]
 
 

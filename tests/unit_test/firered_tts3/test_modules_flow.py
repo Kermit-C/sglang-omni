@@ -8,8 +8,6 @@ path (see conftest.pin_native_rms_norm), the port must be bit-exact.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -25,8 +23,7 @@ from .conftest import CHECKPOINTS, REFERENCE_FIREREDTTS3, pin_native_rms_norm
 BASE_CHECKPOINT = CHECKPOINTS["base"]
 
 requires_all = pytest.mark.skipif(
-    not BASE_CHECKPOINT.is_dir()
-    or not REFERENCE_FIREREDTTS3.is_dir(),
+    not BASE_CHECKPOINT.is_dir() or not REFERENCE_FIREREDTTS3.is_dir(),
     reason="FireRedTTS3 checkpoint or reference sources not present",
 )
 

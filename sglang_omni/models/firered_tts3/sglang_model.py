@@ -18,10 +18,11 @@ stage-side loaders in weights.py.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 import torch
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.quantization.base_config import QuantizationConfig
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.models.qwen3 import Qwen3ForCausalLM
 from torch import nn
 from transformers import Qwen3Config
@@ -34,6 +35,7 @@ from sglang_omni.models.firered_tts3.weights import (
     strip_backbone_prefix,
 )
 from sglang_omni.models.weight_loader import default_weight_loader
+from sglang_omni.utils.json import JsonValue
 
 # Backbone fields are carried flat on FireRedTTS3Config, mirroring the
 # reference's Qwen3-1.7B config.
@@ -80,13 +82,20 @@ class FireRedTTS3SGLangModel(nn.Module):
     # branch (see forward); this flag then only steers eager prefill.
     text_logits_requested: bool = False
 
-    def __init__(self, config: Any, quant_config: Any = None, prefix: str = "") -> None:
+    def __init__(
+        self,
+        config: FireRedTTS3Config,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
+    ) -> None:
         super().__init__()
         if not isinstance(config, FireRedTTS3Config):
             raise ValueError(
                 "FireRedTTS3 requires the registered FireRedTTS3Config; got "
                 f"{type(config).__name__}"
             )
+        else:
+            pass
         self.config = config
         self.backbone = Qwen3ForCausalLM(
             backbone_qwen3_config(config),
@@ -118,6 +127,8 @@ class FireRedTTS3SGLangModel(nn.Module):
         ):
             if module is not None:
                 module.to(dtype=torch.float32)
+            else:
+                pass
 
         self.llm_hidden_size = int(config.hidden_size)
         self.redae_dim = int(config.redae_dim)
@@ -151,6 +162,8 @@ class FireRedTTS3SGLangModel(nn.Module):
         """
         if max_batch_size <= 0:
             raise ValueError("FireRedTTS3 graph feedback buffer needs a positive size")
+        else:
+            pass
         parameter = next(self.backbone.parameters())
         self.graph_feedback_buffer_value = torch.zeros(
             (int(max_batch_size), self.llm_hidden_size),
@@ -184,8 +197,12 @@ class FireRedTTS3SGLangModel(nn.Module):
                 spk = torch.zeros(1, int(self.config.spk_in_dim), device=device)
                 self.spk_proj_llm(spk)
                 self.spk_proj_dit(spk)
+            else:
+                pass
         if device.type == "cuda":
             torch.cuda.synchronize(device)
+        else:
+            pass
 
     @property
     def weight_update_blocked_reason(self) -> str | None:
@@ -201,6 +218,8 @@ class FireRedTTS3SGLangModel(nn.Module):
         reason = self.weight_update_blocked_reason
         if reason is not None:
             raise RuntimeError(reason)
+        else:
+            pass
         backbone_weights: list[tuple[str, torch.Tensor]] = []
         side_params = dict(self.side_path_parameters())
         loaded: set[str] = set()
@@ -210,13 +229,19 @@ class FireRedTTS3SGLangModel(nn.Module):
             if bucket == "backbone":
                 backbone_weights.append((strip_backbone_prefix(name), tensor))
                 continue
+            else:
+                pass
             if bucket == "lm_head":
                 # Speaker checkpoints ship a tied lm_head copy; the head is
                 # tied to embed_tokens at load, so the copy is dropped.
                 skipped += 1
                 continue
+            else:
+                pass
             if bucket == "unknown":
                 raise ValueError(f"unexpected FireRedTTS3 checkpoint key {name!r}")
+            else:
+                pass
             parameter = side_params.get(name)
             assert parameter is not None, (
                 f"FireRedTTS3 checkpoint key {name!r} routed to {bucket} but no "
@@ -242,8 +267,12 @@ class FireRedTTS3SGLangModel(nn.Module):
         ]
         if self.spk_proj_llm is not None:
             modules.append(self.spk_proj_llm)
+        else:
+            pass
         if self.spk_proj_dit is not None:
             modules.append(self.spk_proj_dit)
+        else:
+            pass
         return modules
 
     def side_path_parameters(self) -> Iterable[tuple[str, nn.Parameter]]:
@@ -257,6 +286,8 @@ class FireRedTTS3SGLangModel(nn.Module):
         ):
             if module is None:
                 continue
+            else:
+                pass
             for name, parameter in module.named_parameters():
                 yield f"{prefix}.{name}", parameter
 
@@ -264,9 +295,9 @@ class FireRedTTS3SGLangModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        forward_batch: Any,
+        forward_batch: ForwardBatch,
         input_embeds: torch.Tensor | None = None,
-        **kwargs: Any,
+        **kwargs: JsonValue | torch.Tensor,
     ) -> LogitsProcessorOutput:
         del kwargs
         if (
@@ -278,6 +309,8 @@ class FireRedTTS3SGLangModel(nn.Module):
             input_embeds = self.graph_feedback_buffer_value[: input_ids.shape[0]]
         elif input_embeds is None:
             input_embeds = forward_batch.input_embeds
+        else:
+            pass
         hidden_states = self.backbone.model(
             input_ids=input_ids,
             positions=positions,
@@ -301,6 +334,8 @@ class FireRedTTS3SGLangModel(nn.Module):
             return self.backbone.logits_processor(
                 input_ids, hidden_states, self.backbone.lm_head, forward_batch
             )
+        else:
+            pass
         # The runner consumes hidden states only and overwrites
         # next_token_ids; dummy logits just satisfy the contract.
         if forward_batch.forward_mode.is_extend():

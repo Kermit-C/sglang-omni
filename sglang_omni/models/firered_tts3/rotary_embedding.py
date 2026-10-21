@@ -50,6 +50,8 @@ class RotaryEmbedding(Module):
     def forward(self, t, offset=0):
         if t.ndim == 1:
             t = rearrange(t, "n -> 1 n")
+        else:
+            pass
 
         freqs = (
             torch.einsum("b i , j -> b i j", t.type_as(self.inv_freq), self.inv_freq)
@@ -77,6 +79,8 @@ def apply_rotary_pos_emb(t, freqs, scale=1):
 
     if t.ndim == 4 and freqs.ndim == 3:
         freqs = rearrange(freqs, "b n d -> b 1 n d")
+    else:
+        pass
 
     # partial rotary embeddings, Wang et al. GPT-J
     t, t_unrotated = t[..., :rot_dim], t[..., rot_dim:]

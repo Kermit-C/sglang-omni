@@ -56,11 +56,17 @@ def route_root_key(key: str) -> str:
     """
     if key.startswith(BACKBONE_LM_HEAD_PREFIX):
         return "lm_head"
+    else:
+        pass
     if key.startswith(BACKBONE_LLM_PREFIX):
         return "backbone"
+    else:
+        pass
     for prefix in SIDE_PATH_PREFIXES:
         if key.startswith(prefix):
             return prefix.removesuffix(".")
+        else:
+            pass
     return "unknown"
 
 
@@ -87,9 +93,13 @@ def read_component_tensors(
             for key in handle.keys():
                 if not key.startswith(prefix):
                     continue
+                else:
+                    pass
                 stripped = key[len(prefix) :]
                 if stripped in skip_if:
                     continue
+                else:
+                    pass
                 tensors[stripped] = handle.get_tensor(key)
     return tensors
 
@@ -223,6 +233,8 @@ def load_campp(model_path: str, *, device: torch.device | str) -> CamppEmbedding
         raise FileNotFoundError(
             f"FireRedTTS3 CAM++ weights not found at {weights_path}"
         )
+    else:
+        pass
     module = CamppEmbedding()
     state = torch.load(weights_path, weights_only=True, map_location="cpu")
     module.model.load_state_dict(state, strict=True)

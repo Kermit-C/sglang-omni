@@ -53,8 +53,10 @@ class CompiledDiTExecutor:
     def compile_backend(
         self, graph_module: torch.fx.GraphModule, example_inputs: list[torch.Tensor]
     ) -> Callable[..., tuple[torch.Tensor, ...]]:
-        compiled = torch._inductor.compile(
-            graph_module, example_inputs, options={"epilogue_fusion": False}
+        compiled = (
+            torch._inductor.compile(  # noqa: leading-underscore  # PyTorch compiler API
+                graph_module, example_inputs, options={"epilogue_fusion": False}
+            )
         )
 
         def execute(*args: torch.Tensor) -> tuple[torch.Tensor, ...]:
@@ -74,9 +76,10 @@ class CompiledDiTExecutor:
             self.active_modes.reset(token)
 
     def original(self, *, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        with torch._dynamo.config.patch(
+        with torch._dynamo.config.patch(  # noqa: leading-underscore  # PyTorch compiler API
             recompile_limit=max(
-                DIT_RECOMPILE_LIMIT, torch._dynamo.config.recompile_limit
+                DIT_RECOMPILE_LIMIT,
+                torch._dynamo.config.recompile_limit,  # noqa: leading-underscore  # PyTorch compiler API
             ),
             fail_on_recompile_limit_hit=True,
             suppress_errors=False,
@@ -98,9 +101,10 @@ class CompiledDiTExecutor:
         else:
             assert packed_mode.packed_compiled is not None
             observed = packed_mode.packed_compiled
-        with torch._dynamo.config.patch(
+        with torch._dynamo.config.patch(  # noqa: leading-underscore  # PyTorch compiler API
             recompile_limit=max(
-                DIT_RECOMPILE_LIMIT, torch._dynamo.config.recompile_limit
+                DIT_RECOMPILE_LIMIT,
+                torch._dynamo.config.recompile_limit,  # noqa: leading-underscore  # PyTorch compiler API
             ),
             fail_on_recompile_limit_hit=True,
             suppress_errors=False,
@@ -170,6 +174,8 @@ class TimeGemmMode(TorchDispatchMode):
             raise TimeCacheUnavailable(
                 "Cached time execution requires a prepared table"
             )
+        else:
+            pass
         self.weights = weights
         self.phase = phase
         self.n_timesteps = n_timesteps
@@ -185,6 +191,8 @@ class TimeGemmMode(TorchDispatchMode):
     def step(self, index: int) -> Iterator[None]:
         if self.active_call.get() is not None or not 0 <= index < self.n_timesteps:
             raise TimeCacheUnavailable(f"Invalid or nested time step {index}")
+        else:
+            pass
         call = TimeGemmCall(index=index)
         token = self.active_call.set(call)
         try:
@@ -194,6 +202,8 @@ class TimeGemmMode(TorchDispatchMode):
                 raise TimeCacheUnavailable(
                     f"Time step {index} missed compiled addmm operations: {sorted(missing)}"
                 )
+            else:
+                pass
         finally:
             self.active_call.reset(token)
 
@@ -207,17 +217,25 @@ class TimeGemmMode(TorchDispatchMode):
         kwargs = kwargs or {}
         if func is not torch.ops.aten.addmm.out:
             return func(*args, **kwargs)
+        else:
+            pass
         bias, inputs, weight = cast(
             tuple[torch.Tensor, torch.Tensor, torch.Tensor], args
         )
         name = self.weights.get(weight.data_ptr())
         if name is None:
             return func(*args, **kwargs)
+        else:
+            pass
         call = self.active_call.get()
         if call is None or name in call.seen:
             raise TimeCacheUnavailable(f"Unscoped or repeated time addmm: {name}")
+        else:
+            pass
         if kwargs.get("alpha", 1) != 1 or kwargs.get("beta", 1) != 1:
             raise TimeCacheUnavailable(f"Unsupported time addmm scaling: {name}")
+        else:
+            pass
         call.seen.add(name)
         out = cast(torch.Tensor, kwargs["out"])
         signature = GemmSignature(
@@ -235,6 +253,8 @@ class TimeGemmMode(TorchDispatchMode):
         if self.phase == "collect":
             if name in self.collected[call.index]:
                 raise TimeCacheUnavailable(f"Repeated time table entry: {name}")
+            else:
+                pass
             result = func(*args, **kwargs)
             self.collected[call.index][name] = TimeGemmValue(
                 signature=signature,
@@ -248,6 +268,8 @@ class TimeGemmMode(TorchDispatchMode):
                 raise TimeCacheUnavailable(
                     f"Time table signature changed: step={call.index}, operation={name}"
                 )
+            else:
+                pass
             out.copy_(value.output)
             return out
 
@@ -278,6 +300,8 @@ class TimeConditionCache:
             raise TimeCacheUnavailable(
                 f"Expected {expected} independent time Linear weights, found {len(weights)}"
             )
+        else:
+            pass
         self.weights = MappingProxyType(weights)
         self.parameters = {
             name: TimeParameter(
@@ -286,7 +310,9 @@ class TimeConditionCache:
                 stride=tuple(parameter.stride()),
                 dtype=parameter.dtype,
                 device=parameter.device,
-                version=None if torch.is_inference(parameter) else parameter._version,
+                version=(
+                    None if torch.is_inference(parameter) else parameter._version
+                ),  # noqa: leading-underscore  # PyTorch tensor version API
             )
             for name, parameter in dit.named_parameters()
             if name.startswith("t_embedder.") or ".adaLN_modulation." in name
@@ -302,18 +328,24 @@ class TimeConditionCache:
             parameter = current.get(name)
             if parameter is None:
                 raise TimeCacheUnavailable(f"Time parameter was removed: {name}")
+            else:
+                pass
             actual = TimeParameter(
                 pointer=parameter.data_ptr(),
                 shape=tuple(parameter.shape),
                 stride=tuple(parameter.stride()),
                 dtype=parameter.dtype,
                 device=parameter.device,
-                version=None if torch.is_inference(parameter) else parameter._version,
+                version=(
+                    None if torch.is_inference(parameter) else parameter._version
+                ),  # noqa: leading-underscore  # PyTorch tensor version API
             )
             if actual != expected:
                 raise TimeCacheUnavailable(
                     f"Time parameter changed; rebuild cache: {name}"
                 )
+            else:
+                pass
 
     def prepare(
         self,
@@ -327,6 +359,8 @@ class TimeConditionCache:
             raise TimeCacheUnavailable(
                 "Time cache and executor have different model weights"
             )
+        else:
+            pass
         if (
             example_x.device.type != "cuda"
             or example_x.ndim != 3
@@ -342,10 +376,14 @@ class TimeConditionCache:
             raise TimeCacheUnavailable(
                 "Unsupported time-table input or schedule schema"
             )
+        else:
+            pass
         if torch.cuda.is_current_stream_capturing():
             raise TimeCacheUnavailable(
                 "Time tables must be prepared before graph capture"
             )
+        else:
+            pass
         collector = TimeGemmMode(self.weights, phase="collect", n_timesteps=n_timesteps)
         batch_size = example_x.shape[0] // 2
         with torch.inference_mode():
@@ -359,6 +397,8 @@ class TimeConditionCache:
                     raise TimeCacheUnavailable(
                         f"Observed original graph changed output at time step {index}"
                     )
+                else:
+                    pass
         table = TimeGemmTable(
             model_id=id(self.source),
             n_timesteps=n_timesteps,
@@ -376,6 +416,8 @@ class TimeConditionCache:
                     raise TimeCacheUnavailable(
                         f"Cached original graph changed output at time step {index}"
                     )
+                else:
+                    pass
         return table
 
     def mode(self, table: TimeGemmTable) -> TimeGemmMode:
