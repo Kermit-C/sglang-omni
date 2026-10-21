@@ -245,6 +245,7 @@ class FireRedTTS3BatchVocoder(BatchVocoderBase):
             modality="audio",
             source_hint="fireredtts3",
         )
+        payload.data["finish_reason"] = state.finish_reason
         if state.gen_text:
             # The Instruct text-phase product (voice plan / edited
             # transcript); surfaces as chunk.text on the client.
@@ -800,6 +801,7 @@ class FireRedTTS3StreamingVocoder(
         result: dict[str, Any] = {
             "modality": "audio",
             "sample_rate": self.sample_rate,
+            "finish_reason": tts_state.finish_reason,
         }
         if tts_state.gen_text:
             result["text"] = tts_state.gen_text

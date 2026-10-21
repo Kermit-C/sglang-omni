@@ -93,6 +93,31 @@ def payload_with(state: FireRedTTS3State) -> StagePayload:
     )
 
 
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "abort", None])
+@pytest.mark.parametrize("stream", [False, True])
+def test_vocoder_preserves_terminal_metadata(
+    finish_reason: str | None, stream: bool
+) -> None:
+    state = FireRedTTS3State(
+        finish_reason=finish_reason,
+        gen_text="voice plan",
+        completion_tokens=3,
+    )
+    payload = payload_with(state)
+    decoder = torch.nn.Linear(1, 1)
+    if stream:
+        vocoder = make_streaming_vocoder(decoder)
+        result = vocoder.final_result_data(
+            "rid", payload, vocoder.create_stream_state("rid")
+        )
+    else:
+        vocoder = make_vocoder(decoder)
+        result = vocoder.store_result(payload, state, torch.zeros(240), 24000).data
+    assert result["finish_reason"] == finish_reason
+    assert result["text"] == "voice plan"
+    assert result["usage"]["completion_tokens"] == 3
+
+
 @requires_checkpoints
 @requires_gpu
 @pytest.mark.accelerator
