@@ -302,19 +302,33 @@ def test_instruct_task_validation(monkeypatch) -> None:
         )
 
 
-def test_instruct_explicit_sampling_overrides_task_default(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "sampling_overrides, expected_sampling",
+    [
+        ({}, (0.7, 0.8, 20)),
+        ({"temperature": 0.0}, (0.0, 0.8, 20)),
+        ({"top_p": 0.5, "top_k": 5}, (0.7, 0.5, 5)),
+    ],
+)
+def test_instruct_explicit_sampling_overrides_task_default(
+    monkeypatch: pytest.MonkeyPatch,
+    sampling_overrides: dict[str, float | int],
+    expected_sampling: tuple[float, float, int],
+) -> None:
+    """Supplied sampling fields must override VoiceDesign defaults without metadata."""
     _tokenizer, data = preprocess_instruct(
         instruct_payload(
             task_type="VoiceDesign",
             instructions="a calm deep voice",
-            params={"temperature": 0.0},
-            tts_params={"explicit_generation_params": ["temperature"]},
+            params=sampling_overrides,
         ),
         monkeypatch,
     )
-    # An explicit greedy request beats the voice_design sampling default.
-    assert data["text_temperature"] == 0.0
-    assert (data["text_top_p"], data["text_top_k"]) == (0.8, 20)
+    assert (
+        data["text_temperature"],
+        data["text_top_p"],
+        data["text_top_k"],
+    ) == expected_sampling
 
 
 SPEAKER_CONFIG = FireRedTTS3Config(

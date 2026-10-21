@@ -193,25 +193,22 @@ def count_audio_patches(audio_path: str, *, cap_seconds: float | None) -> int:
 
 
 def resolve_text_sampling(
-    task: str, params: dict[str, JsonValue], tts_params: dict[str, JsonValue]
+    task: str, params: dict[str, JsonValue]
 ) -> tuple[float, float | None, int | None]:
-    """Text-phase sampling: the reference defaults per task, with explicit
-    client generation fields (tracked by the serving layer) taking precedence.
-    """
+    """Apply supplied sampling fields over the task's text-generation defaults."""
     if task == "voice_design":
         temperature, top_p, top_k = 0.7, 0.8, 20
     else:
         temperature, top_p, top_k = 0.0, None, None
-    explicit = set(tts_params.get("explicit_generation_params") or [])
-    if "temperature" in explicit:
+    if params.get("temperature") is not None:
         temperature = float(params["temperature"])
     else:
         pass
-    if "top_p" in explicit:
+    if params.get("top_p") is not None:
         top_p = float(params["top_p"])
     else:
         pass
-    if "top_k" in explicit:
+    if params.get("top_k") is not None:
         top_k = int(params["top_k"])
     else:
         pass
@@ -661,7 +658,7 @@ def compose_instruct_state(
     else:
         raise AssertionError(f"unhandled FireRedTTS3-Instruct task: {task}")
 
-    temperature, top_p, top_k = resolve_text_sampling(task, params, tts_params)
+    temperature, top_p, top_k = resolve_text_sampling(task, params)
     return FireRedTTS3State(
         sample_rate=int(config.audio_sample_rate),
         variant="instruct",
