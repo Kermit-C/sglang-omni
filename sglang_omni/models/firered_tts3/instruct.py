@@ -3,6 +3,14 @@
 
 from __future__ import annotations
 
+import base64
+import io
+import math
+from urllib.request import urlopen
+
+import soundfile as sf
+import torch
+import torchaudio
 from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
@@ -21,11 +29,10 @@ from sglang_omni.models.firered_tts3.prompt_utils import (
     compose_voice_design,
     tokenize_text,
 )
-from sglang_omni.utils.audio import load_audio
 from sglang_omni.utils.json import JsonValue
 
 AUDIO_SAMPLE_RATE = 24000
-
+AUDIO_URL_TIMEOUT_SECONDS = 60
 SAMPLES_PER_PATCH = 3840
 
 INSTRUCT_TASK_ALIASES: dict[str, FireRedTTS3TaskType] = {
@@ -61,18 +68,39 @@ def normalize_instruct_task(value: JsonValue) -> FireRedTTS3TaskType:
 
 
 def count_audio_patches(audio_path: str, *, cap_seconds: float | None) -> int:
-    """Count prompt slots after the encoder's resampling and edit cap."""
-    waveform = load_audio(
-        audio_path,
-        source_name="FireRedTTS3 reference",
-        target_sample_rate=AUDIO_SAMPLE_RATE,
-        mono=True,
-    )
-    if cap_seconds is not None:
-        waveform = waveform[: int(AUDIO_SAMPLE_RATE * cap_seconds)]
+    """Count prompt slots after clipping and resampling the reference audio."""
+    # note (kermit): Prompt counting preserves its URL timeout and SoundFile error contract.
+    audio_source: str | io.BytesIO
+    if audio_path.startswith(("http://", "https://")):
+        with urlopen(audio_path, timeout=AUDIO_URL_TIMEOUT_SECONDS) as response:
+            audio_source = io.BytesIO(response.read())
+    elif audio_path.startswith("data:"):
+        _, _, encoded_audio = audio_path.partition(",")
+        audio_source = io.BytesIO(base64.b64decode(encoded_audio))
+    else:
+        audio_source = audio_path
+    waveform_samples, sample_rate = sf.read(audio_source, dtype="float32")
+    if waveform_samples.ndim > 1:
+        waveform_samples = waveform_samples.mean(axis=1)
     else:
         pass
-    return -(-len(waveform) // SAMPLES_PER_PATCH)
+    waveform = torch.from_numpy(waveform_samples)
+    if cap_seconds is not None:
+        waveform = waveform[..., : int(sample_rate * cap_seconds)]
+    else:
+        pass
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    else:
+        pass
+    waveform = waveform[:1].float()
+    if sample_rate != AUDIO_SAMPLE_RATE:
+        waveform = torchaudio.functional.resample(
+            waveform, sample_rate, AUDIO_SAMPLE_RATE
+        )
+    else:
+        pass
+    return math.ceil(waveform.shape[1] / SAMPLES_PER_PATCH)
 
 
 def resolve_text_sampling(

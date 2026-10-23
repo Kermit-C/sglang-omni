@@ -21,7 +21,7 @@ from sglang_omni.models.firered_tts3.flow_graph import (
     flow_t_span,
 )
 from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
-from sglang_omni.models.firered_tts3.patch_encoder import PatchEncoder
+from sglang_omni.models.firered_tts3.modules import PatchEncoder
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
 from sglang_omni.models.firered_tts3.redae_decoder import RedAEAudioDecoder

@@ -9,9 +9,9 @@ from sglang_omni.models.firered_tts3.modules import (
     Attention,
     FeedForward,
     RMSNorm,
+    RotaryEmbedding,
     TimestepEmbedder,
 )
-from sglang_omni.models.firered_tts3.rotary_embedding import RotaryEmbedding
 
 
 class ConvBlock(nn.Module):

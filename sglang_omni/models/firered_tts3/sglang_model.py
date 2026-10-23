@@ -15,7 +15,7 @@ from transformers import Qwen3Config
 
 from sglang_omni.models.firered_tts3.dit import DiT
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
-from sglang_omni.models.firered_tts3.patch_encoder import PatchEncoder
+from sglang_omni.models.firered_tts3.modules import PatchEncoder
 from sglang_omni.models.firered_tts3.weights import (
     build_dit,
     build_patch_encoder,

@@ -4,11 +4,18 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import io
+from collections.abc import Iterator
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from typing import Literal
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
-import httpx
 import numpy as np
 import pytest
 import soundfile as sf
@@ -16,6 +23,25 @@ import soundfile as sf
 from sglang_omni.models.firered_tts3 import prompt_utils
 from sglang_omni.models.firered_tts3.instruct import count_audio_patches
 from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
+
+
+@pytest.fixture
+def audio_server_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    with ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+    ) as server:
+        server_thread = Thread(
+            target=server.serve_forever,
+            kwargs={"poll_interval": 0.01},
+            daemon=True,
+        )
+        server_thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}"
+        finally:
+            server.shutdown()
+            server_thread.join()
 
 
 def test_base_text_template_matches_reference() -> None:
@@ -55,16 +81,19 @@ def test_speaker_text_expands_han_tokens_and_preserves_unknown_characters(
         (44100, 7056, None, 1),
         (44100, 7057, None, 2),
         (16000, 320001, 20.0, 125),
+        (16000, 2561, 0.16005, 1),
     ],
 )
 def test_audio_prompt_slots_follow_resampled_patch_boundaries(
     tmp_path: Path,
+    audio_server_url: str,
+    monkeypatch: pytest.MonkeyPatch,
     sample_rate: int,
     sample_count: int,
     cap_seconds: float | None,
     expected_patches: int,
 ) -> None:
-    """Audio source formats must agree on patch slots after resampling and edit caps."""
+    """Clip before resampling so fractional caps cannot add a prompt slot."""
     encoded_audio = io.BytesIO()
     sf.write(
         encoded_audio,
@@ -77,16 +106,44 @@ def test_audio_prompt_slots_follow_resampled_patch_boundaries(
     audio_path = tmp_path / "reference.wav"
     audio_path.write_bytes(audio_bytes)
     audio_uri = f"data:audio/wav;base64,{base64.b64encode(audio_bytes).decode('ascii')}"
-    audio_url = "https://audio.example.test/reference.wav"
-    response = httpx.Response(
-        200, content=audio_bytes, request=httpx.Request("GET", audio_url)
+    permissive_audio_uri = (
+        f"data:audio/wav,{base64.b64encode(audio_bytes).decode('ascii')}\n"
     )
-    with patch("sglang_omni.utils.audio.httpx.get", return_value=response):
-        for reference in (str(audio_path), audio_uri, audio_url):
+    audio_url = f"{audio_server_url}/reference.wav"
+    monkeypatch.setenv("REQUEST_TIMEOUT", "1")
+    with patch(
+        "sglang_omni.models.firered_tts3.instruct.urlopen", wraps=urlopen
+    ) as open_audio_url:
+        for reference in (str(audio_path), audio_uri, permissive_audio_uri, audio_url):
             assert (
                 count_audio_patches(reference, cap_seconds=cap_seconds)
                 == expected_patches
             )
+        open_audio_url.assert_called_once_with(audio_url, timeout=60)
+
+
+@pytest.mark.parametrize(
+    "source,expected_error",
+    [("http", HTTPError), ("file", sf.LibsndfileError), ("data_uri", binascii.Error)],
+)
+def test_audio_prompt_count_preserves_source_errors(
+    tmp_path: Path,
+    audio_server_url: str,
+    source: Literal["http", "file", "data_uri"],
+    expected_error: type[Exception],
+) -> None:
+    """Source failures retain their HTTP, SoundFile, or base64 exception type."""
+    if source == "http":
+        audio_source = f"{audio_server_url}/missing.wav"
+    elif source == "file":
+        audio_path = tmp_path / "invalid.wav"
+        audio_path.write_bytes(b"invalid audio")
+        audio_source = str(audio_path)
+    else:
+        audio_source = "data:audio/wav;base64,YQ"
+    with pytest.raises(expected_error) as failure:
+        count_audio_patches(audio_source, cap_seconds=None)
+    assert type(failure.value) is expected_error
 
 
 def test_compose_acoustic_instruction_templates() -> None:

@@ -13,7 +13,7 @@ from safetensors import safe_open
 from sglang_omni.models.firered_tts3.campp import CamppEmbedding
 from sglang_omni.models.firered_tts3.dit import DiT
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
-from sglang_omni.models.firered_tts3.patch_encoder import PatchEncoder
+from sglang_omni.models.firered_tts3.modules import PatchEncoder
 from sglang_omni.models.firered_tts3.redae_decoder import RedAEAudioDecoder
 from sglang_omni.models.firered_tts3.redae_encoder import RedAEAudioEncoder
 

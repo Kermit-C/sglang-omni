@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Attention, normalization, and patch-encoder blocks for FireRedTTS3."""
+"""Shared acoustic layers, rotary embeddings, and latent patch encoding for FireRedTTS3."""
 
 import math
 from typing import Literal
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-
-from sglang_omni.models.firered_tts3.rotary_embedding import apply_rotary_pos_emb
+from einops import rearrange
+from torch import arange, cat, nn, stack
+from torch.amp import autocast
+from torch.nn import Module
 
 
 class SinusPositionEmbedding(nn.Module):
@@ -193,3 +194,129 @@ class FinalLayer(nn.Module):
         x = self.norm_final(x)
         x = self.linear(x)
         return x
+
+
+class PatchEncoder(torch.nn.Module):
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        patch_size: int = 4,
+        hidden_size: int = 1024,
+        mlp_ratio: int = 3,
+        depth: int = 8,
+        num_heads: int = 8,
+    ) -> None:
+        super().__init__()
+        self.in_dim: int = in_dim
+        self.patch_size: int = patch_size
+        self.hidden_size: int = hidden_size
+        self.out_dim: int = out_dim
+        self.cls_tok: torch.nn.Parameter = torch.nn.Parameter(
+            torch.zeros(1, 1, hidden_size)
+        )
+        self.rotary_embed: RotaryEmbedding = RotaryEmbedding(hidden_size // num_heads)
+        self.blocks: torch.nn.ModuleList = torch.nn.ModuleList(
+            [
+                DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio)
+                for _ in range(depth)
+            ]
+        )
+        self.in_proj: torch.nn.Linear | torch.nn.Identity = (
+            torch.nn.Linear(in_dim, hidden_size)
+            if in_dim != hidden_size
+            else torch.nn.Identity()
+        )
+        self.out_proj: FinalLayer = FinalLayer(hidden_size, out_dim)
+
+    def forward(self, inputs_embeds: torch.Tensor) -> torch.Tensor:
+        """Patch encoder aggregating patch_size latents into one."""
+        assert (
+            inputs_embeds.shape[1] % self.patch_size == 0
+        ), f"inputs_embeds.shape={inputs_embeds.shape} patch_size={self.patch_size}"
+        inputs_embeds = self.in_proj(inputs_embeds)
+        hidden_states = inputs_embeds.reshape(-1, self.patch_size, self.hidden_size)
+        cls_tok = self.cls_tok.expand(hidden_states.shape[0], -1, -1)
+        hidden_states = torch.cat([cls_tok, hidden_states], dim=1)
+        rope = self.rotary_embed.forward_from_seq_len(hidden_states.shape[1])
+        for block in self.blocks:
+            hidden_states = block(hidden_states, None, rope)
+        hidden_states = self.out_proj(hidden_states)
+        hidden_states = hidden_states[:, 0]
+        hidden_states = hidden_states.unsqueeze(0)
+        return hidden_states
+
+
+class RotaryEmbedding(Module):
+    inv_freq: torch.Tensor
+
+    def __init__(
+        self,
+        dim: int,
+        interpolation_factor: float = 1.0,
+        base: float = 10000,
+        base_rescale_factor: float = 1.0,
+    ) -> None:
+        super().__init__()
+        base *= base_rescale_factor ** (dim / (dim - 2))
+        inv_freq = 1.0 / base ** (arange(0, dim, 2).float() / dim)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        assert interpolation_factor >= 1.0
+        self.interpolation_factor: float = interpolation_factor
+
+    def forward_from_seq_len(
+        self, position_count: int
+    ) -> tuple[torch.Tensor, float | torch.Tensor | None]:
+        device = self.inv_freq.device
+        t = arange(position_count, device=device)
+        return self.forward(t)
+
+    @autocast("cuda", enabled=False)
+    def forward(
+        self, t: torch.Tensor
+    ) -> tuple[torch.Tensor, float | torch.Tensor | None]:
+        if t.ndim == 1:
+            t = rearrange(t, "n -> 1 n")
+        else:
+            pass
+        position_frequencies = (
+            torch.einsum("b i , j -> b i j", t.type_as(self.inv_freq), self.inv_freq)
+            / self.interpolation_factor
+        )
+        position_frequencies = stack(
+            (position_frequencies, position_frequencies), dim=-1
+        )
+        position_frequencies = rearrange(position_frequencies, "... d r -> ... (d r)")
+        return (position_frequencies, 1.0)
+
+
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x = rearrange(x, "... (d r) -> ... d r", r=2)
+    x1, x2 = x.unbind(dim=-1)
+    x = stack((-x2, x1), dim=-1)
+    return rearrange(x, "... d r -> ... (d r)")
+
+
+@autocast("cuda", enabled=False)
+def apply_rotary_pos_emb(
+    t: torch.Tensor, position_frequencies: torch.Tensor, scale: float | torch.Tensor = 1
+) -> torch.Tensor:
+    rotary_size, position_count, original_dtype = (
+        position_frequencies.shape[-1],
+        t.shape[-2],
+        t.dtype,
+    )
+    position_frequencies = position_frequencies[:, -position_count:, :]
+    scale = scale[:, -position_count:, :] if isinstance(scale, torch.Tensor) else scale
+    if t.ndim == 4 and position_frequencies.ndim == 3:
+        position_frequencies = rearrange(position_frequencies, "b n d -> b 1 n d")
+    else:
+        pass
+    t, t_unrotated = (t[..., :rotary_size], t[..., rotary_size:])
+    t = (
+        t * position_frequencies.cos() * scale
+        + rotate_half(t) * position_frequencies.sin() * scale
+    )
+    out = cat((t, t_unrotated), dim=-1)
+    return out.type(original_dtype)
