@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Container
+from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from typing import Literal
 
@@ -13,7 +16,11 @@ from safetensors import safe_open
 from sglang_omni.models.firered_tts3.campp import CamppEmbedding
 from sglang_omni.models.firered_tts3.dit import DiT
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
-from sglang_omni.models.firered_tts3.modules import PatchEncoder
+from sglang_omni.models.firered_tts3.modules import (
+    Attention,
+    PackedAttention,
+    PatchEncoder,
+)
 from sglang_omni.models.firered_tts3.redae_decoder import RedAEAudioDecoder
 from sglang_omni.models.firered_tts3.redae_encoder import RedAEAudioEncoder
 
@@ -202,6 +209,10 @@ def load_campp(model_path: str, *, device: torch.device | str) -> CamppEmbedding
 
 
 __all__ = [
+    "FfnWeight",
+    "PackedQkvModel",
+    "TensorBinding",
+    "TimeParameter",
     "BACKBONE_LLM_PREFIX",
     "BACKBONE_LM_HEAD_PREFIX",
     "BACKBONE_MODEL_INFIX",
@@ -219,3 +230,129 @@ __all__ = [
     "route_root_key",
     "strip_backbone_prefix",
 ]
+
+
+@dataclass(frozen=True, kw_only=True)
+class FfnWeight:
+    name: str
+    source: torch.Tensor
+    bias: torch.Tensor
+    bias_pointer: int
+    device: torch.device
+    output_size: int
+    version: int | None
+    bias_version: int | None
+
+    @classmethod
+    def from_linear(cls, name: str, layer: torch.nn.Linear) -> FfnWeight:
+        weight, bias = layer.weight, layer.bias
+        assert bias is not None
+        return cls(
+            name=f"{name}.weight",
+            source=weight,
+            bias=bias,
+            bias_pointer=bias.data_ptr(),
+            device=weight.device,
+            output_size=weight.shape[0],
+            version=(
+                None if torch.is_inference(weight) else weight._version
+            ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
+            bias_version=(
+                None if torch.is_inference(bias) else bias._version
+            ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class TensorBinding:
+    value: torch.Tensor
+    pointer: int
+    shape: torch.Size
+    stride: tuple[int, ...]
+    dtype: torch.dtype
+    device: torch.device
+    version: int | None
+
+
+class PackedQkvModel:
+    """Share immutable model tensors and validate copied QKV parameters before capture."""
+
+    def __init__(self, source: torch.nn.Module) -> None:
+        self.source = source
+        original = dict(chain(source.named_parameters(), source.named_buffers()))
+        self.model = copy.deepcopy(source, memo={id(t): t for t in original.values()})
+        self.layers: dict[str, PackedAttention] = {}
+        for name, attention in list(self.model.named_modules()):
+            if name.endswith(".attn"):
+                if type(attention) is not Attention:
+                    raise RuntimeError(f"Unsupported packed attention: {name}")
+                else:
+                    packed = PackedAttention(attention)
+                    self.model.set_submodule(name, packed)
+                    self.layers[name] = packed
+            else:
+                pass
+        candidate = dict(
+            chain(self.model.named_parameters(), self.model.named_buffers())
+        )
+        if not self.layers or any(
+            candidate.get(name) is not value for name, value in original.items()
+        ):
+            raise RuntimeError(
+                "Packed DiT must preserve all original parameter and buffer bindings"
+            )
+        else:
+            pass
+        self.projections = {
+            f"{name}.{role}.{parameter}": TensorBinding(
+                value=value,
+                pointer=value.data_ptr(),
+                shape=value.shape,
+                stride=value.stride(),
+                dtype=value.dtype,
+                device=value.device,
+                version=(
+                    None if torch.is_inference(value) else value._version
+                ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
+            )
+            for name, layer in self.layers.items()
+            for role in ("to_q", "to_k", "to_v")
+            for parameter, value in layer.get_submodule(role).named_parameters()
+        }
+        self.tensors = tuple(chain(self.model.parameters(), self.model.buffers()))
+
+    def validate_weights(self) -> None:
+        """Reject changes to source projections copied into the packed weights."""
+        for name, binding in self.projections.items():
+            current = self.source.get_parameter(name)
+            version = (
+                None if torch.is_inference(current) else current._version
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
+            if (
+                current is not binding.value
+                or current.data_ptr() != binding.pointer
+                or current.shape != binding.shape
+                or current.stride() != binding.stride
+                or current.dtype != binding.dtype
+                or current.device != binding.device
+                or version != binding.version
+            ):
+                raise RuntimeError(
+                    f"Packed DiT projection changed; rebuild mode: {name}"
+                )
+            else:
+                pass
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        for tensor in self.tensors:
+            tensor.record_stream(stream)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TimeParameter:
+    pointer: int
+    shape: tuple[int, ...]
+    stride: tuple[int, ...]
+    dtype: torch.dtype
+    device: torch.device
+    version: int | None

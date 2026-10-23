@@ -10,8 +10,11 @@ import pytest
 import torch
 from sglang.srt.managers.utils import GenerationBatchResult
 
-from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
-from sglang_omni.models.firered_tts3.prompt_utils import AUDIO_SOS_ID, TEXT_EOT_ID
+from sglang_omni.models.firered_tts3.model_runner import (
+    AUDIO_SOS_ID,
+    TEXT_EOT_ID,
+    FireRedTTS3ModelRunner,
+)
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     TEXT_MODE_AUDIO,

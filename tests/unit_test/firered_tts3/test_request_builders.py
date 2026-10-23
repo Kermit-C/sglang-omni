@@ -6,14 +6,15 @@ from __future__ import annotations
 import pytest
 import torch
 
+from sglang_omni.models.firered_tts3.model_runner import TEXT_EOT_ID
 from sglang_omni.models.firered_tts3.payload_types import (
+    ENGINE_TOKEN_SLACK,
+    TEXT_TOKEN_BUDGET,
     FireRedTTS3State,
     load_firered_tts3_state,
 )
-from sglang_omni.models.firered_tts3.prompt_utils import TEXT_EOT_ID, TEXT_TOKEN_BUDGET
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
-    ENGINE_TOKEN_SLACK,
     FireRedTTS3SGLangRequestData,
     apply_latent_result,
     build_sglang_firered_tts3_request,

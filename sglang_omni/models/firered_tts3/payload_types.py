@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -15,6 +16,16 @@ from sglang_omni.utils.audio_payload import audio_data_uri_from_reference
 from sglang_omni.utils.json import JsonValue
 
 FireRedTTS3TaskType = Literal["tts", "voice_design", "semantic_edit", "acoustic_edit"]
+
+PROMPT_CHUNK_METADATA_KEY = "prompt_chunk"
+LEFT_CONTEXT_METADATA_KEY = "left_context_size"
+
+MAX_EDIT_SECONDS = 20.0
+TEXT_TOKEN_BUDGET = 200
+TEXT_PHASE_TASKS = frozenset({"voice_design", "semantic_edit"})
+TEXT_TRANSITION_FEEDS = 2
+# note (kermit): The engine budget includes the final stop-decision feed.
+ENGINE_TOKEN_SLACK = 20
 
 
 @dataclass
@@ -67,7 +78,13 @@ def store_firered_tts3_state(
     return payload
 
 
-__all__ = ["FireRedTTS3State", "load_firered_tts3_state", "store_firered_tts3_state"]
+__all__ = [
+    "FireRedTTS3State",
+    "LEFT_CONTEXT_METADATA_KEY",
+    "PROMPT_CHUNK_METADATA_KEY",
+    "load_firered_tts3_state",
+    "store_firered_tts3_state",
+]
 
 
 def first_not_none(*values: JsonValue, default: JsonValue = None) -> JsonValue:
@@ -124,3 +141,95 @@ def resolve_request_reference(
         reference.get("text"),
     )
     return audio_path, reference_text
+
+
+INSTRUCT_TASK_ALIASES: dict[str, FireRedTTS3TaskType] = {
+    "tts": "tts",
+    "base": "tts",
+    "voicedesign": "voice_design",
+    "semanticedit": "semantic_edit",
+    "acousticedit": "acoustic_edit",
+}
+
+
+def normalize_instruct_task(value: JsonValue) -> FireRedTTS3TaskType:
+    task_type = (
+        INSTRUCT_TASK_ALIASES.get(
+            str(value).strip().replace("_", "").replace("-", "").lower()
+        )
+        if value is not None
+        else None
+    )
+    if task_type is None:
+        if value is None:
+            return "tts"
+        else:
+            pass
+        raise ValueError(
+            f"unsupported FireRedTTS3-Instruct task_type {value!r}; expected one of VoiceDesign / SemanticEdit / AcousticEdit (or ref_audio tts)"
+        )
+    else:
+        pass
+    return task_type
+
+
+def resolve_text_sampling(
+    task_type: FireRedTTS3TaskType, request_parameters: dict[str, JsonValue]
+) -> tuple[float, float | None, int | None]:
+    """Apply explicit parameters over the task's text-sampling defaults."""
+    if task_type == "voice_design":
+        text_temperature, text_top_p, text_top_k = 0.7, 0.8, 20
+    else:
+        text_temperature, text_top_p, text_top_k = 0.0, None, None
+    if request_parameters.get("temperature") is not None:
+        text_temperature = float(request_parameters["temperature"])
+    else:
+        pass
+    if request_parameters.get("top_p") is not None:
+        text_top_p = float(request_parameters["top_p"])
+    else:
+        pass
+    if request_parameters.get("top_k") is not None:
+        text_top_k = int(request_parameters["top_k"])
+    else:
+        pass
+    return text_temperature, text_top_p, text_top_k
+
+
+def require_edit_source(
+    reference_audio: str | None, task_type: FireRedTTS3TaskType
+) -> str:
+    if reference_audio is None:
+        raise ValueError(
+            f"FireRedTTS3 {task_type} requires a reference audio (the edit source)"
+        )
+    else:
+        pass
+    return reference_audio
+
+
+def engine_token_budget(
+    request_state: FireRedTTS3State, *, interleave_ratio: tuple[int, int] | None = None
+) -> int:
+    """Include text and transition feeds in the request's decode budget."""
+    if request_state.dual_stream:
+        if interleave_ratio is None:
+            raise ValueError(
+                "FireRedTTS3 dual-stream requests require the checkpoint's text_latent_interleave_ratio"
+            )
+        else:
+            pass
+        text_steps, audio_steps = interleave_ratio
+        steps_per_patch = (int(text_steps) + int(audio_steps)) / int(audio_steps)
+        return (
+            int(math.ceil(steps_per_patch * int(request_state.max_patches)))
+            + ENGINE_TOKEN_SLACK
+        )
+    else:
+        pass
+    budget = request_state.max_patches + ENGINE_TOKEN_SLACK
+    if request_state.task_type in TEXT_PHASE_TASKS:
+        budget += TEXT_TOKEN_BUDGET + TEXT_TRANSITION_FEEDS
+    else:
+        pass
+    return budget

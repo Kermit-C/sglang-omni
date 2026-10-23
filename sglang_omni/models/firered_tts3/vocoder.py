@@ -15,6 +15,8 @@ from typing import Literal, TypedDict
 import torch
 
 from sglang_omni.models.firered_tts3.payload_types import (
+    LEFT_CONTEXT_METADATA_KEY,
+    PROMPT_CHUNK_METADATA_KEY,
     FireRedTTS3State,
     load_firered_tts3_state,
 )
@@ -48,9 +50,6 @@ from sglang_omni.utils.audio_payload import audio_waveform_payload
 logger = logging.getLogger(__name__)
 
 SAMPLES_PER_LATENT_FRAME = 960
-
-PROMPT_CHUNK_METADATA_KEY = "prompt_chunk"
-LEFT_CONTEXT_METADATA_KEY = "left_context_size"
 
 DEBUG_DUMP_DIR_ENV = "FIREREDTTS3_DEBUG_DUMP_DIR"
 
@@ -724,6 +723,4 @@ __all__ = [
     "FireRedCoalescedStep",
     "FireRedTTS3BatchVocoder",
     "FireRedTTS3StreamingVocoder",
-    "LEFT_CONTEXT_METADATA_KEY",
-    "PROMPT_CHUNK_METADATA_KEY",
 ]

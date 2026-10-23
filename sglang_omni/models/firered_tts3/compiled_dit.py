@@ -1,38 +1,39 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Execute the original compiled DiT with optional external-operation caches."""
+"""Compiled DiT execution and optional optimized projection resources."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import Literal, cast
+from typing import Protocol, cast
 
 import torch
 from torch._ops import OpOverload
 from torch.utils._python_dispatch import TorchDispatchMode
 
 from sglang_omni.models.firered_tts3.dit import DiT
-from sglang_omni.models.firered_tts3.ffngemm import QKV_CONFIGS, FfnGemmMode
+from sglang_omni.models.firered_tts3.modules import Attention
+from sglang_omni.models.firered_tts3.weights import FfnWeight, PackedQkvModel
+
+try:
+    from sglang_omni.models.firered_tts3.ffn_gemm_kernel import gemm_out
+except ImportError:
+    gemm_out = None
 
 # note (Codex): each bucket uses separate Dynamo entries for both backends.
 DIT_RECOMPILE_LIMIT = 64
-
-
-class TimeCacheUnavailable(RuntimeError):
-    """The caller must retry the complete flow using the original compiled DiT."""
-
-
-def finite_byte_equal(actual: torch.Tensor, expected: torch.Tensor) -> bool:
-    if actual.shape != expected.shape or actual.dtype != expected.dtype:
-        return False
-    else:
-        return bool(torch.isfinite(actual).all().item()) and torch.equal(
-            actual.contiguous().view(torch.uint8),
-            expected.contiguous().view(torch.uint8),
-        )
+# note (Codex): measured SM120 tiles; small FFN1 and M192 QKV use K128 rounding.
+FFN_CONFIGS = {
+    24: (16, 64, 64, 4, 3),
+    48: (32, 64, 64, 4, 3),
+    96: (32, 128, 64, 4, 3),
+}
+QKV_CONFIGS = {192: (64, 128, 64, 4, 3), 384: (64, 64, 64, 4, 3)}
+FFN_LAYERS = 11
+CompileBackend = Callable[
+    [torch.fx.GraphModule, list[torch.Tensor]], Callable[..., tuple[torch.Tensor, ...]]
+]
 
 
 class CompiledDiTExecutor:
@@ -113,97 +114,206 @@ class CompiledDiTExecutor:
         return self.original(x=x, t=t)
 
 
-@dataclass(frozen=True, kw_only=True)
-class GemmSignature:
-    input_shape: tuple[int, ...]
-    input_stride: tuple[int, ...]
-    weight_shape: tuple[int, ...]
-    weight_stride: tuple[int, ...]
-    bias_shape: tuple[int, ...]
-    bias_stride: tuple[int, ...]
-    output_shape: tuple[int, ...]
-    output_stride: tuple[int, ...]
-    dtype: torch.dtype
-    device: torch.device
-
-
-@dataclass(frozen=True, kw_only=True)
-class TimeGemmValue:
-    signature: GemmSignature
-    output: torch.Tensor
-
-
-@dataclass(frozen=True, kw_only=True)
-class TimeGemmTable:
-    """Graph entries must retain this table until their graphs are destroyed."""
-
-    model_id: int
-    n_timesteps: int
-    steps: tuple[Mapping[str, TimeGemmValue], ...]
-
-    @property
-    def nbytes(self) -> int:
-        return sum(
-            value.output.numel() * value.output.element_size()
-            for step in self.steps
-            for value in step.values()
-        )
-
-
-@dataclass(kw_only=True)
-class TimeGemmCall:
-    index: int
-    seen: set[str] = field(default_factory=set)
-
-
-class TimeGemmMode(TorchDispatchMode):
-    """Copy exact original addmm outputs into their original destination buffers."""
-
-    def __init__(
+class GemmOutput(Protocol):
+    def __call__(
         self,
-        weights: Mapping[int, str],
-        *,
-        phase: Literal["collect", "cached"],
-        n_timesteps: int,
-        table: TimeGemmTable | None = None,
-    ) -> None:
-        super().__init__()
-        if phase == "cached" and table is None:
-            raise TimeCacheUnavailable(
-                "Cached time execution requires a prepared table"
-            )
-        else:
-            pass
-        self.weights = weights
-        self.phase = phase
-        self.n_timesteps = n_timesteps
-        self.table = table
-        self.collected: list[dict[str, TimeGemmValue]] = [
-            {} for _ in range(n_timesteps)
-        ]
-        self.active_call: ContextVar[TimeGemmCall | None] = ContextVar(
-            "firered_time_gemm_call", default=None
-        )
+        inputs: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        out: torch.Tensor,
+        config: tuple[int, int, int, int, int],
+    ) -> torch.Tensor: ...
 
-    @contextmanager
-    def step(self, index: int) -> Iterator[None]:
-        if self.active_call.get() is not None or not 0 <= index < self.n_timesteps:
-            raise TimeCacheUnavailable(f"Invalid or nested time step {index}")
+
+class FfnGemmMode(TorchDispatchMode):
+    """Own small FFN1 and large packed-QKV resources for their CUDA graph lifetime.
+
+    Inference weights are immutable: rebuild after every weight update, including
+    in-place updates of inference tensors without a version counter.
+    """
+
+    def __init__(self, source: torch.nn.Module) -> None:
+        super().__init__()
+        self.source = source
+        self.weights: dict[int, FfnWeight] = {}
+        self.packed_weights: dict[int, FfnWeight] = {}
+        self.packed_qkv: PackedQkvModel | None = None
+        self.packed_compiled: torch.nn.Module | None = None
+        self.hits = 0
+        self.misses = 0
+        self.enabled = False
+        self.reason = "DiT GEMM optimization requires eleven CUDA BF16 Linear layers"
+        self.gemm_out: GemmOutput | None = None
+        layers = [
+            (name, layer)
+            for name, layer in source.named_modules()
+            if isinstance(layer, torch.nn.Linear) and name.endswith(".mlp.ff.0.0")
+        ]
+        if len(layers) != FFN_LAYERS or any(
+            layer.weight.shape != (3072, 1024)
+            or layer.bias is None
+            or layer.bias.shape != (3072,)
+            or not layer.weight.is_contiguous()
+            or not layer.bias.is_contiguous()
+            or not layer.weight.is_cuda
+            or layer.weight.dtype != torch.bfloat16
+            or layer.bias.dtype != torch.bfloat16
+            or layer.weight.device != layer.bias.device
+            for _, layer in layers
+        ):
+            return
         else:
-            pass
-        call = TimeGemmCall(index=index)
-        token = self.active_call.set(call)
-        try:
-            yield
-            missing = set(self.weights.values()) - call.seen
-            if missing:
-                raise TimeCacheUnavailable(
-                    f"Time step {index} missed compiled addmm operations: {sorted(missing)}"
+            device = layers[0][1].weight.device
+            if any(layer.weight.device != device for _, layer in layers):
+                return
+            elif torch.cuda.get_device_capability(device) != (12, 0):
+                self.reason = "DiT GEMM optimization requires SM120"
+                return
+            elif not torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction:
+                self.reason = (
+                    "DiT GEMM optimization requires BF16 reduced precision reduction"
+                )
+                return
+            else:
+                if gemm_out is None:
+                    raise RuntimeError("DiT GEMM optimization requires Triton")
+                else:
+                    pass
+                self.gemm_out = gemm_out
+                self.weights = {
+                    layer.weight.data_ptr(): FfnWeight.from_linear(name, layer)
+                    for name, layer in layers
+                }
+                if len(self.weights) != FFN_LAYERS:
+                    self.reason = (
+                        "DiT GEMM optimization requires independent Linear weights"
+                    )
+                    return
+                else:
+                    self.enabled = True
+                    self.reason = ""
+
+    def prepare_packed(
+        self, compile_backend: CompileBackend, device: torch.device
+    ) -> None:
+        """Prepare large-bucket QKV before capture without changing the small FFN path."""
+        if self.packed_compiled is not None:
+            return
+        elif not self.enabled:
+            raise RuntimeError(self.reason)
+        else:
+            with torch.cuda.device(device):
+                if torch.cuda.is_current_stream_capturing():
+                    raise RuntimeError("Packed QKV must be prepared before capture")
+                else:
+                    pass
+            self.validate_weights()
+            attentions = [
+                (name, layer)
+                for name, layer in self.source.named_modules()
+                if name.endswith(".attn")
+            ]
+            if len(attentions) != FFN_LAYERS or any(
+                type(layer) is not Attention for _, layer in attentions
+            ):
+                raise RuntimeError(
+                    "Packed QKV requires eleven original DiT Attention layers"
                 )
             else:
                 pass
-        finally:
-            self.active_call.reset(token)
+            for name, attention in attentions:
+                for role in ("to_q", "to_k", "to_v"):
+                    layer = attention.get_submodule(role)
+                    if (
+                        layer.weight.shape != (1024, 1024)
+                        or layer.bias is None
+                        or layer.bias.shape != (1024,)
+                        or any(
+                            t.dtype != torch.bfloat16
+                            or t.device != device
+                            or not t.is_contiguous()
+                            for t in (layer.weight, layer.bias)
+                        )
+                    ):
+                        raise RuntimeError(
+                            f"Unsupported packed QKV parameters: {name}.{role}"
+                        )
+                    else:
+                        pass
+            packed_qkv = PackedQkvModel(self.source)
+            packed_weights = {
+                packed.to_qkv.weight.data_ptr(): FfnWeight.from_linear(
+                    f"{name}.to_qkv", packed.to_qkv
+                )
+                for name, packed in packed_qkv.layers.items()
+            }
+            packed_compiled = torch.compile(
+                packed_qkv.model, backend=compile_backend, dynamic=False
+            )
+            self.packed_qkv = packed_qkv
+            self.packed_weights = packed_weights
+            self.packed_compiled = packed_compiled
+
+    def supports(self, rows: int) -> bool:
+        return self.enabled and (
+            rows in FFN_CONFIGS
+            or (rows in QKV_CONFIGS and self.packed_compiled is not None)
+        )
+
+    def expected_hits(self, rows: int) -> int:
+        if rows in FFN_CONFIGS:
+            return len(self.weights)
+        elif rows in QKV_CONFIGS:
+            return len(self.packed_weights)
+        else:
+            return 0
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Called once per graph replay stream by the owning graph entry."""
+        for entry in self.weights.values():
+            entry.source.record_stream(stream)
+            entry.bias.record_stream(stream)
+        if self.packed_qkv is not None:
+            self.packed_qkv.record_stream(stream)
+        else:
+            pass
+
+    def validate_weights(self) -> None:
+        """Validate cached parameters before capturing a new graph."""
+        if self.packed_qkv is not None:
+            self.packed_qkv.validate_weights()
+        else:
+            pass
+        for pointer, entry in self.weights.items():
+            current = self.source.get_parameter(entry.name)
+            bias = self.source.get_parameter(entry.name.removesuffix("weight") + "bias")
+            version = (
+                None if torch.is_inference(current) else current._version
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
+            bias_version = (
+                None if torch.is_inference(bias) else bias._version
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
+            if (
+                current is not entry.source
+                or bias is not entry.bias
+                or current.data_ptr() != pointer
+                or current.shape != (entry.output_size, 1024)
+                or current.stride() != (1024, 1)
+                or bias.data_ptr() != entry.bias_pointer
+                or bias.shape != (entry.output_size,)
+                or bias.stride() != (1,)
+                or current.dtype != torch.bfloat16
+                or bias.dtype != torch.bfloat16
+                or current.device != entry.device
+                or bias.device != entry.device
+                or version != entry.version
+                or bias_version != entry.bias_version
+            ):
+                raise RuntimeError(
+                    f"DiT GEMM weights changed; rebuild mode: {entry.name}"
+                )
+            else:
+                pass
 
     def __torch_dispatch__(
         self,
@@ -213,215 +323,88 @@ class TimeGemmMode(TorchDispatchMode):
         kwargs: dict[str, object] | None = None,
     ) -> object:
         kwargs = kwargs or {}
-        if func is not torch.ops.aten.addmm.out:
+        if not self.enabled or func is not torch.ops.aten.addmm.out:
             return func(*args, **kwargs)
         else:
-            pass
-        bias, inputs, weight = cast(
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor], args
-        )
-        name = self.weights.get(weight.data_ptr())
-        if name is None:
-            return func(*args, **kwargs)
-        else:
-            pass
-        call = self.active_call.get()
-        if call is None or name in call.seen:
-            raise TimeCacheUnavailable(f"Unscoped or repeated time addmm: {name}")
-        else:
-            pass
-        if kwargs.get("alpha", 1) != 1 or kwargs.get("beta", 1) != 1:
-            raise TimeCacheUnavailable(f"Unsupported time addmm scaling: {name}")
-        else:
-            pass
-        call.seen.add(name)
-        out = cast(torch.Tensor, kwargs["out"])
-        signature = GemmSignature(
-            input_shape=tuple(inputs.shape),
-            input_stride=tuple(inputs.stride()),
-            weight_shape=tuple(weight.shape),
-            weight_stride=tuple(weight.stride()),
-            bias_shape=tuple(bias.shape),
-            bias_stride=tuple(bias.stride()),
-            output_shape=tuple(out.shape),
-            output_stride=tuple(out.stride()),
-            dtype=out.dtype,
-            device=out.device,
-        )
-        if self.phase == "collect":
-            if name in self.collected[call.index]:
-                raise TimeCacheUnavailable(f"Repeated time table entry: {name}")
+            fields: dict[str, object] = {"alpha": 1, "beta": 1}
+            fields.update(zip(("self", "mat1", "mat2"), args))
+            fields.update(kwargs)
+            weight = fields.get("mat2")
+            pointer = weight.data_ptr() if isinstance(weight, torch.Tensor) else None
+            entry = self.weights.get(pointer)
+            if entry is None:
+                entry = self.packed_weights.get(pointer)
+                configs = QKV_CONFIGS
             else:
-                pass
-            result = func(*args, **kwargs)
-            self.collected[call.index][name] = TimeGemmValue(
-                signature=signature,
-                output=out.clone(memory_format=torch.preserve_format),
-            )
-            return result
-        else:
-            assert self.table is not None
-            value = self.table.steps[call.index].get(name)
-            if value is None or value.signature != signature:
-                raise TimeCacheUnavailable(
-                    f"Time table signature changed: step={call.index}, operation={name}"
-                )
+                configs = FFN_CONFIGS
+            if entry is None:
+                return func(*args, **kwargs)
+            elif len(args) > 3 or set(fields) != {
+                "self",
+                "mat1",
+                "mat2",
+                "out",
+                "alpha",
+                "beta",
+            }:
+                self.misses += 1
+                return func(*args, **kwargs)
             else:
-                pass
-            out.copy_(value.output)
-            return out
-
-
-@dataclass(frozen=True, kw_only=True)
-class TimeParameter:
-    pointer: int
-    shape: tuple[int, ...]
-    stride: tuple[int, ...]
-    dtype: torch.dtype
-    device: torch.device
-    version: int | None
-
-
-class TimeConditionCache:
-    """Prepare tables owned by their active graph entries and dispatch modes."""
-
-    def __init__(self, dit: DiT) -> None:
-        self.source = dit
-        weights = {
-            module.weight.data_ptr(): name
-            for name, module in dit.named_modules()
-            if isinstance(module, torch.nn.Linear)
-            and (name.startswith("t_embedder.") or ".adaLN_modulation." in name)
-        }
-        expected = 2 + len(dit.blocks) + 1
-        if len(weights) != expected:
-            raise TimeCacheUnavailable(
-                f"Expected {expected} independent time Linear weights, found {len(weights)}"
-            )
-        else:
-            pass
-        self.weights = MappingProxyType(weights)
-        self.parameters = {
-            name: TimeParameter(
-                pointer=parameter.data_ptr(),
-                shape=tuple(parameter.shape),
-                stride=tuple(parameter.stride()),
-                dtype=parameter.dtype,
-                device=parameter.device,
-                version=(
-                    None if torch.is_inference(parameter) else parameter._version
-                ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
-            )
-            for name, parameter in dit.named_parameters()
-            if name.startswith("t_embedder.") or ".adaLN_modulation." in name
-        }
-        self.version_checks_available = all(
-            parameter.version is not None for parameter in self.parameters.values()
-        )
-
-    def validate_weights(self) -> None:
-        """Recreate the runner after weight changes, including unversioned writes."""
-        current = dict(self.source.named_parameters())
-        for name, expected in self.parameters.items():
-            parameter = current.get(name)
-            if parameter is None:
-                raise TimeCacheUnavailable(f"Time parameter was removed: {name}")
-            else:
-                pass
-            actual = TimeParameter(
-                pointer=parameter.data_ptr(),
-                shape=tuple(parameter.shape),
-                stride=tuple(parameter.stride()),
-                dtype=parameter.dtype,
-                device=parameter.device,
-                version=(
-                    None if torch.is_inference(parameter) else parameter._version
-                ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
-            )
-            if actual != expected:
-                raise TimeCacheUnavailable(
-                    f"Time parameter changed; rebuild cache: {name}"
-                )
-            else:
-                pass
-
-    def prepare(
-        self,
-        executor: CompiledDiTExecutor,
-        example_x: torch.Tensor,
-        t_span: torch.Tensor,
-        n_timesteps: int,
-    ) -> TimeGemmTable:
-        self.validate_weights()
-        if executor.source is not self.source:
-            raise TimeCacheUnavailable(
-                "Time cache and executor have different model weights"
-            )
-        else:
-            pass
-        if (
-            example_x.device.type != "cuda"
-            or example_x.ndim != 3
-            or example_x.shape[0] <= 0
-            or example_x.shape[0] % 2
-            or example_x.dtype not in (torch.float32, torch.bfloat16)
-            or t_span.dtype is not torch.float32
-            or t_span.ndim != 1
-            or n_timesteps <= 0
-            or t_span.numel() != n_timesteps + 1
-            or t_span.device != example_x.device
-        ):
-            raise TimeCacheUnavailable(
-                "Unsupported time-table input or schedule schema"
-            )
-        else:
-            pass
-        if torch.cuda.is_current_stream_capturing():
-            raise TimeCacheUnavailable(
-                "Time tables must be prepared before graph capture"
-            )
-        else:
-            pass
-        collector = TimeGemmMode(self.weights, phase="collect", n_timesteps=n_timesteps)
-        batch_size = example_x.shape[0] // 2
-        with torch.inference_mode():
-            for index in range(n_timesteps):
-                t = t_span[index].view(-1, 1, 1).expand(batch_size, -1, -1)
-                t = torch.cat([t, t], dim=0).to(example_x.dtype)
-                reference = executor.original(x=example_x, t=t)
-                with collector.step(index), executor.dispatch((collector,)):
-                    observed = executor.run(x=example_x, t=t)
-                if not finite_byte_equal(observed, reference):
-                    raise TimeCacheUnavailable(
-                        f"Observed original graph changed output at time step {index}"
-                    )
+                inputs, bias, out = (fields[name] for name in ("mat1", "self", "out"))
+                if not all(
+                    isinstance(tensor, torch.Tensor) for tensor in (inputs, bias, out)
+                ):
+                    self.misses += 1
+                    return func(*args, **kwargs)
                 else:
-                    pass
-        table = TimeGemmTable(
-            model_id=id(self.source),
-            n_timesteps=n_timesteps,
-            steps=tuple(MappingProxyType(dict(row)) for row in collector.collected),
-        )
-        mode = self.mode(table)
-        with torch.inference_mode():
-            for index in range(n_timesteps):
-                t = t_span[index].view(-1, 1, 1).expand(batch_size, -1, -1)
-                t = torch.cat([t, t], dim=0).to(example_x.dtype)
-                reference = executor.original(x=example_x, t=t)
-                with mode.step(index), executor.dispatch((mode,)):
-                    cached = executor.run(x=example_x, t=t)
-                if not finite_byte_equal(cached, reference):
-                    raise TimeCacheUnavailable(
-                        f"Cached original graph changed output at time step {index}"
+                    inputs, bias, out = cast(
+                        tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+                        (inputs, bias, out),
                     )
-                else:
-                    pass
-        return table
-
-    def mode(self, table: TimeGemmTable) -> TimeGemmMode:
-        if table.model_id != id(self.source):
-            raise TimeCacheUnavailable("Time table belongs to different model weights")
-        else:
-            return TimeGemmMode(
-                self.weights, phase="cached", n_timesteps=table.n_timesteps, table=table
-            )
+                    weight = cast(torch.Tensor, weight)
+                    if (
+                        fields["alpha"] != 1
+                        or fields["beta"] != 1
+                        or inputs.ndim != 2
+                        or inputs.shape[0] not in configs
+                        or inputs.shape[1] != 1024
+                        or not inputs.is_contiguous()
+                        or weight.shape != (1024, 3072)
+                        or weight.stride() != (1, 1024)
+                        or bias.shape != (3072,)
+                        or bias.stride() != (1,)
+                        or bias.data_ptr() != entry.bias_pointer
+                        or out.shape != (inputs.shape[0], 3072)
+                        or not out.is_contiguous()
+                        or any(
+                            t.dtype != torch.bfloat16
+                            or t.device != entry.device
+                            or t.is_neg()
+                            or t.is_conj()
+                            for t in (inputs, weight, bias, out)
+                        )
+                        or (
+                            torch.is_grad_enabled()
+                            and any(
+                                t.requires_grad for t in (inputs, weight, bias, out)
+                            )
+                        )
+                    ):
+                        self.misses += 1
+                        return func(*args, **kwargs)
+                    else:
+                        start, end = out.data_ptr(), out.data_ptr() + out.numel() * 2
+                        if any(
+                            max(start, t.data_ptr())
+                            < min(end, t.data_ptr() + t.numel() * 2)
+                            for t in (inputs, weight, bias)
+                        ):
+                            self.misses += 1
+                            return func(*args, **kwargs)
+                        else:
+                            assert self.gemm_out is not None
+                            result = self.gemm_out(
+                                inputs, weight, bias, out, configs[inputs.shape[0]]
+                            )
+                            self.hits += 1
+                            return result

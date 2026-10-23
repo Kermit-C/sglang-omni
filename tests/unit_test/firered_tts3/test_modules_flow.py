@@ -6,13 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from sglang_omni.models.firered_tts3.compiled_dit import (
-    DIT_RECOMPILE_LIMIT,
-    TimeCacheUnavailable,
-    TimeGemmMode,
-    TimeGemmTable,
-    finite_byte_equal,
-)
+from sglang_omni.models.firered_tts3.compiled_dit import DIT_RECOMPILE_LIMIT
 from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
 from sglang_omni.models.firered_tts3.dit import DiT
@@ -22,8 +16,14 @@ from sglang_omni.models.firered_tts3.flow_graph import (
     flow_t_span,
     prepare_flow_dit,
 )
-from sglang_omni.models.firered_tts3.flow_precision import FlowPrecisionGate
-from sglang_omni.models.firered_tts3.packed_qkv import PackedQkvModel
+from sglang_omni.models.firered_tts3.flow_time_cache import (
+    FlowPrecisionGate,
+    TimeCacheUnavailable,
+    TimeGemmMode,
+    TimeGemmTable,
+    finite_byte_equal,
+)
+from sglang_omni.models.firered_tts3.weights import PackedQkvModel
 from tests.unit_test.fixtures.firered_tts3 import (
     HISTORY_LENGTH,
     N_TIMESTEPS,

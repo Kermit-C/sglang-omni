@@ -12,16 +12,14 @@ import torch
 from sglang_omni.models.firered_tts3.campp import CamppEmbedding
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
 from sglang_omni.models.firered_tts3.payload_types import (
+    LEFT_CONTEXT_METADATA_KEY,
+    MAX_EDIT_SECONDS,
+    PROMPT_CHUNK_METADATA_KEY,
     load_firered_tts3_state,
     store_firered_tts3_state,
 )
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
-from sglang_omni.models.firered_tts3.prompt_utils import MAX_EDIT_SECONDS
 from sglang_omni.models.firered_tts3.redae_encoder import RedAEAudioEncoder
-from sglang_omni.models.firered_tts3.vocoder import (
-    LEFT_CONTEXT_METADATA_KEY,
-    PROMPT_CHUNK_METADATA_KEY,
-)
 from sglang_omni.models.firered_tts3.weights import load_campp, load_redae_encoder
 from sglang_omni.preprocessing.cache_key import (
     hash_media_item,

@@ -13,12 +13,13 @@ from sglang.srt.sampling.sampling_params import SamplingParams
 from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.models.firered_tts3.payload_types import (
+    ENGINE_TOKEN_SLACK,
+    TEXT_PHASE_TASKS,
     FireRedTTS3State,
     load_firered_tts3_state,
     store_firered_tts3_state,
 )
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
-from sglang_omni.models.firered_tts3.prompt_utils import TEXT_PHASE_TASKS
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
@@ -35,8 +36,6 @@ DS_STAGE_TEXT: DualStreamStage = "text"
 DS_STAGE_PATCH: DualStreamStage = "patch"
 # note (kermit): Latent-only steps still need an in-vocabulary token on the engine rail.
 CONTROL_TOKEN_ID = 0
-# note (kermit): The engine budget includes the final stop-decision feed.
-ENGINE_TOKEN_SLACK = 20
 # note (kermit): Early small chunks reduce time to first audio.
 STREAM_CHUNK_PATCH_RAMP = (1, 2, 4)
 
@@ -293,7 +292,6 @@ def flush_stream_output(
 build_stream_output.flush = flush_stream_output  # type: ignore[attr-defined]
 __all__ = [
     "CONTROL_TOKEN_ID",
-    "ENGINE_TOKEN_SLACK",
     "STREAM_CHUNK_PATCH_RAMP",
     "DS_STAGE_PATCH",
     "DS_STAGE_TEXT",

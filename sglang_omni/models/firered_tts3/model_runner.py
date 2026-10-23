@@ -19,6 +19,7 @@ from sglang_omni.models.firered_tts3.flow_graph import (
     euler_flow_loop,
     flow_t_span,
 )
+from sglang_omni.models.firered_tts3.payload_types import TEXT_TOKEN_BUDGET
 from sglang_omni.models.firered_tts3.prefill import (
     audio_hidden_row_offset,
     build_base_prefill_embeds,
@@ -28,11 +29,6 @@ from sglang_omni.models.firered_tts3.prefill import (
     text_output_token_count,
 )
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
-from sglang_omni.models.firered_tts3.prompt_utils import (
-    AUDIO_SOS_ID,
-    TEXT_EOT_ID,
-    TEXT_TOKEN_BUDGET,
-)
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     DS_STAGE_PATCH,
@@ -50,6 +46,10 @@ from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 from sglang_omni.sampling.seed import derive_sampling_seed
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.types import SchedulerRequest
+
+# note (kermit): Base/Instruct share these ids; Speaker checkpoints resolve tokens by name.
+TEXT_EOT_ID = 151677
+AUDIO_SOS_ID = 151669
 
 
 @dataclass(kw_only=True)

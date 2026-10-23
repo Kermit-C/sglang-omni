@@ -148,6 +148,34 @@ class Attention(nn.Module):
         return x
 
 
+class PackedAttention(Attention):
+    """Reuse attention's post-projection operations without changing its source."""
+
+    def __init__(self, source: Attention) -> None:
+        torch.nn.Module.__init__(self)
+        self.dim, self.inner_dim = source.dim, source.inner_dim
+        self.heads, self.dropout = source.heads, source.dropout
+        self.training = source.training
+        self.to_q, self.to_k, self.to_v = source.to_q, source.to_k, source.to_v
+        self.to_out = source.to_out
+        self.to_qkv = torch.nn.Linear(self.dim, 3 * self.inner_dim, device="meta")
+        projections = (self.to_q, self.to_k, self.to_v)
+        self.to_qkv.weight = torch.nn.Parameter(
+            torch.cat([layer.weight.detach() for layer in projections]),
+            requires_grad=False,
+        )
+        self.to_qkv.bias = torch.nn.Parameter(
+            torch.cat([layer.bias.detach() for layer in projections]),
+            requires_grad=False,
+        )
+        self.to_qkv.training = source.training
+
+    def project_qkv(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.to_qkv(x).chunk(3, dim=-1)
+
+
 class DiTBlock(nn.Module):
     """Patch-encoder block: attention + FFN only (no conv, no AdaLN)."""
 

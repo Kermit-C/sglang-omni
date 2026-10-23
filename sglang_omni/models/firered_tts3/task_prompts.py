@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Prepare FireRedTTS3 Instruct tasks and their prompt sampling."""
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Prepare Base and Instruct reference-audio prompts for FireRedTTS3."""
 
 from __future__ import annotations
 
@@ -15,56 +16,100 @@ from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
 from sglang_omni.models.firered_tts3.payload_types import (
+    MAX_EDIT_SECONDS,
     FireRedTTS3State,
     FireRedTTS3TaskType,
     first_not_none,
+    require_edit_source,
     resolve_request_reference,
-)
-from sglang_omni.models.firered_tts3.prompt_utils import (
-    MAX_EDIT_SECONDS,
-    compose_acoustic_edit,
-    compose_acoustic_instruction,
-    compose_semantic_edit,
-    compose_tts,
-    compose_voice_design,
-    tokenize_text,
+    resolve_text_sampling,
 )
 from sglang_omni.utils.json import JsonValue
 
 AUDIO_SAMPLE_RATE = 24000
 AUDIO_URL_TIMEOUT_SECONDS = 60
 SAMPLES_PER_PATCH = 3840
-
-INSTRUCT_TASK_ALIASES: dict[str, FireRedTTS3TaskType] = {
-    "tts": "tts",
-    "base": "tts",
-    "voicedesign": "voice_design",
-    "semanticedit": "semantic_edit",
-    "acousticedit": "acoustic_edit",
-}
-
 ACOUSTIC_ATTRIBUTES = ("Speed", "Pitch", "Volume")
+CHATML_LATENT_IN_PAD_SYM = "<|image_pad|>"
+CHATML_LATENT_OUT_PAD_SYM = "<|video_pad|>"
 
 
-def normalize_instruct_task(value: JsonValue) -> FireRedTTS3TaskType:
-    task_type = (
-        INSTRUCT_TASK_ALIASES.get(
-            str(value).strip().replace("_", "").replace("-", "").lower()
-        )
-        if value is not None
-        else None
+MULTI_LANG_TAGS = (
+    "Chinese",
+    "English",
+    "Cantonese",
+    "Japanese",
+    "Korean",
+    "Spanish",
+    "French",
+    "Russian",
+    "Arabic",
+    "Turkish",
+    "Indonesian",
+    "Portuguese",
+    "Italian",
+    "Dutch",
+    "Vietnamese",
+    "German",
+    "Ukrainian",
+    "Thai",
+    "Polish",
+    "Romanian",
+    "Greek",
+    "Czech",
+    "Finnish",
+    "Hindi",
+)
+
+MULTI_DIALECT_TAGS = tuple(
+    f"ZH_{name}"
+    for name in (
+        "Anhui",
+        "Fujian",
+        "Gansu",
+        "Guizhou",
+        "Hebei",
+        "Henan",
+        "Hubei",
+        "Hunan",
+        "Jiangxi",
+        "Liaoning",
+        "Minnan",
+        "Ningxia",
+        "Shaanxi",
+        "Shandong",
+        "Shanghai",
+        "Shanxi",
+        "Sichuan",
+        "Tianjin",
+        "Wenzhou",
+        "Wu",
+        "Yunnan",
     )
-    if task_type is None:
-        if value is None:
-            return "tts"
-        else:
-            pass
-        raise ValueError(
-            f"unsupported FireRedTTS3-Instruct task_type {value!r}; expected one of VoiceDesign / SemanticEdit / AcousticEdit (or ref_audio tts)"
-        )
-    else:
-        pass
-    return task_type
+)
+
+
+def convert_to_chatml(
+    text_in: str,
+    latent_in_len: int = 0,
+    text_out: str = "",
+    latent_out_len: int = 0,
+) -> str:
+    audio_input = (
+        f"<|sosp|>{CHATML_LATENT_IN_PAD_SYM * latent_in_len}<|eosp|>\n"
+        if latent_in_len > 0
+        else ""
+    )
+    audio_output = (
+        f"<|sosp|>{CHATML_LATENT_OUT_PAD_SYM * latent_out_len}<|eosp|>\n"
+        if latent_out_len > 0
+        else ""
+    )
+    return (
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+        f"<|im_start|>user\n{audio_input}{text_in} /no_think<|im_end|>\n"
+        f"<|im_start|>assistant\n<think>\n\n</think>\n\n{text_out}{audio_output}<|im_end|>\n"
+    )
 
 
 def count_audio_patches(audio_path: str, *, cap_seconds: float | None) -> int:
@@ -103,29 +148,6 @@ def count_audio_patches(audio_path: str, *, cap_seconds: float | None) -> int:
     return math.ceil(waveform.shape[1] / SAMPLES_PER_PATCH)
 
 
-def resolve_text_sampling(
-    task_type: FireRedTTS3TaskType, request_parameters: dict[str, JsonValue]
-) -> tuple[float, float | None, int | None]:
-    """Apply explicit parameters over the task's text-sampling defaults."""
-    if task_type == "voice_design":
-        text_temperature, text_top_p, text_top_k = 0.7, 0.8, 20
-    else:
-        text_temperature, text_top_p, text_top_k = 0.0, None, None
-    if request_parameters.get("temperature") is not None:
-        text_temperature = float(request_parameters["temperature"])
-    else:
-        pass
-    if request_parameters.get("top_p") is not None:
-        text_top_p = float(request_parameters["top_p"])
-    else:
-        pass
-    if request_parameters.get("top_k") is not None:
-        text_top_k = int(request_parameters["top_k"])
-    else:
-        pass
-    return text_temperature, text_top_p, text_top_k
-
-
 def resolve_acoustic_instruction(
     instruction_text: str | None,
     tts_parameters: dict[str, JsonValue],
@@ -156,7 +178,69 @@ def resolve_acoustic_instruction(
         tts_parameters.get("speed"),
         default=1.0,
     )
-    return compose_acoustic_instruction(attribute, float(value))
+    acoustic_value = float(value)
+    if attribute == "Speed":
+        return f"adjust the speed to {acoustic_value:.1f}x"
+    elif attribute == "Volume":
+        return f"adjust the volume to {acoustic_value:.1f}"
+    else:
+        steps = int(round(acoustic_value))
+        return f"shift the pitch by {steps} step{'' if abs(steps) == 1 else 's'}"
+
+
+def compose_base_state(
+    config: FireRedTTS3Config,
+    *,
+    tokenizer: PreTrainedTokenizerBase,
+    request_inputs: dict[str, JsonValue],
+    tts_parameters: dict[str, JsonValue],
+    text: str,
+) -> FireRedTTS3State:
+    if not text.strip():
+        raise ValueError("FireRedTTS3 requires non-empty input text")
+    else:
+        pass
+    text = text.strip()
+    prompt_audio_path, prompt_text_value = resolve_request_reference(
+        request_inputs, tts_parameters
+    )
+    if prompt_audio_path is None:
+        raise ValueError("FireRedTTS3-Base requires a reference audio (voice cloning)")
+    else:
+        pass
+    if prompt_text_value is None or not str(prompt_text_value).strip():
+        raise ValueError(
+            "FireRedTTS3-Base requires the reference audio transcript (ref_text / references[0].text)"
+        )
+    else:
+        pass
+    prompt_text = str(prompt_text_value).strip()
+    language = str(
+        first_not_none(
+            request_inputs.get("language"),
+            tts_parameters.get("language"),
+            default="Chinese",
+        )
+    )
+    if language not in MULTI_LANG_TAGS + MULTI_DIALECT_TAGS:
+        raise ValueError(
+            f"unsupported FireRedTTS3 language {language!r}; expected one of MULTI_LANG_TAGS/MULTI_DIALECT_TAGS"
+        )
+    else:
+        pass
+    return FireRedTTS3State(
+        sample_rate=int(config.audio_sample_rate),
+        variant="base",
+        task_type="tts",
+        text=text,
+        prompt_audio_path=prompt_audio_path,
+        prompt_text=prompt_text,
+        language=language,
+        input_ids=tokenizer(
+            f"<|{language}|><|sot|>{prompt_text}{text}<|eot|>",
+            add_special_tokens=False,
+        )["input_ids"],
+    )
 
 
 def compose_instruct_state(
@@ -203,7 +287,10 @@ def compose_instruct_state(
         prompt_audio_path = reference_audio
         prompt_text = str(prompt_text_value).strip()
         prompt_patch_count = count_audio_patches(prompt_audio_path, cap_seconds=None)
-        prompt_template = compose_tts(prompt_patch_count, prompt_text, text.strip())
+        prompt_template = convert_to_chatml(
+            text_in=f"Convert text to speech.\n{prompt_text}{text.strip()}",
+            latent_out_len=prompt_patch_count,
+        ).removesuffix("<|eosp|>\n<|im_end|>\n")
     elif task_type == "voice_design":
         if not text.strip():
             raise ValueError("FireRedTTS3 voice_design requires non-empty input text")
@@ -213,7 +300,10 @@ def compose_instruct_state(
             raise ValueError("FireRedTTS3 voice_design requires instructions")
         else:
             pass
-        prompt_template = compose_voice_design(instruction_text, text.strip())
+        prompt_template = convert_to_chatml(
+            text_in=f"{instruction_text}\n\n根据上述音色描述，首先整理成语音属性，再合成以下文本对应的音频：\n{text.strip()}",
+            text_out="<|sot|>",
+        ).removesuffix("<|im_end|>\n")
     elif task_type == "semantic_edit":
         if not instruction_text:
             raise ValueError("FireRedTTS3 semantic_edit requires instructions")
@@ -223,9 +313,11 @@ def compose_instruct_state(
         audio_input_patch_count = count_audio_patches(
             audio_input_path, cap_seconds=MAX_EDIT_SECONDS
         )
-        prompt_template = compose_semantic_edit(
-            instruction_text, audio_input_patch_count
-        )
+        prompt_template = convert_to_chatml(
+            text_in=f"Identify the content of the audio. {instruction_text.strip()}",
+            latent_in_len=audio_input_patch_count,
+            text_out="<|sot|>",
+        ).removesuffix("<|im_end|>\n")
     elif task_type == "acoustic_edit":
         audio_input_path = require_edit_source(reference_audio, task_type)
         instruction = resolve_acoustic_instruction(
@@ -234,7 +326,11 @@ def compose_instruct_state(
         audio_input_patch_count = count_audio_patches(
             audio_input_path, cap_seconds=MAX_EDIT_SECONDS
         )
-        prompt_template = compose_acoustic_edit(instruction, audio_input_patch_count)
+        prompt_template = convert_to_chatml(
+            text_in=instruction,
+            latent_in_len=audio_input_patch_count,
+            latent_out_len=1,
+        ).removesuffix("<|video_pad|><|eosp|>\n<|im_end|>\n")
     else:
         raise AssertionError(f"unhandled FireRedTTS3-Instruct task: {task_type}")
     text_temperature, text_top_p, text_top_k = resolve_text_sampling(
@@ -249,20 +345,8 @@ def compose_instruct_state(
         prompt_text=prompt_text,
         instructions=instruction_text,
         audio_in_path=audio_input_path,
-        input_ids=tokenize_text(tokenizer, prompt_template),
+        input_ids=tokenizer(prompt_template, add_special_tokens=False)["input_ids"],
         text_temperature=text_temperature,
         text_top_p=text_top_p,
         text_top_k=text_top_k,
     )
-
-
-def require_edit_source(
-    reference_audio: str | None, task_type: FireRedTTS3TaskType
-) -> str:
-    if reference_audio is None:
-        raise ValueError(
-            f"FireRedTTS3 {task_type} requires a reference audio (the edit source)"
-        )
-    else:
-        pass
-    return reference_audio

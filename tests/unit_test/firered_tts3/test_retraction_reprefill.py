@@ -12,13 +12,13 @@ import torch
 from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
 from sglang.srt.managers.utils import GenerationBatchResult
 
-from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
-from sglang_omni.models.firered_tts3.prefill import text_output_token_count
-from sglang_omni.models.firered_tts3.prompt_utils import (
+from sglang_omni.models.firered_tts3.model_runner import (
     AUDIO_SOS_ID,
     TEXT_EOT_ID,
-    TEXT_TOKEN_BUDGET,
+    FireRedTTS3ModelRunner,
 )
+from sglang_omni.models.firered_tts3.payload_types import TEXT_TOKEN_BUDGET
+from sglang_omni.models.firered_tts3.prefill import text_output_token_count
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     DS_STAGE_PATCH,

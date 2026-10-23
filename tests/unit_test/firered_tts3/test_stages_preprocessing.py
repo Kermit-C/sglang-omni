@@ -436,6 +436,6 @@ def test_instruct_preprocessing_routes_tasks_to_model_prompts(
 @pytest.fixture
 def audio_patch_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "sglang_omni.models.firered_tts3.instruct.count_audio_patches",
+        "sglang_omni.models.firered_tts3.task_prompts.count_audio_patches",
         lambda path, *, cap_seconds: 18,
     )

@@ -20,8 +20,16 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from sglang_omni.models.firered_tts3 import prompt_utils
-from sglang_omni.models.firered_tts3.instruct import count_audio_patches
+from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
+from sglang_omni.models.firered_tts3.preprocessing import (
+    compose_speaker_chatml,
+    encode_speaker_text,
+)
+from sglang_omni.models.firered_tts3.task_prompts import (
+    compose_base_state,
+    count_audio_patches,
+    resolve_acoustic_instruction,
+)
 from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
 
 
@@ -46,14 +54,31 @@ def audio_server_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
 
 def test_base_text_template_matches_reference() -> None:
     """Reference text precedes target text inside the checkpoint text delimiters."""
-    language, ref_text, text = "zh", "参考文本。", "要合成的文本。"
-    actual = prompt_utils.compose_base_text(language, ref_text, text)
-    assert actual == "<|zh|><|sot|>参考文本。要合成的文本。<|eot|>"
+    language, ref_text, text = "Chinese", "今天天气很好。", "欢迎使用点点语音合成系统。"
+    tokenizer = make_speaker_tokenizer()
+    state = compose_base_state(
+        FireRedTTS3Config(spk_in_dim=512),
+        tokenizer=tokenizer,
+        request_inputs={
+            "prompt_audio_path": "ref.wav",
+            "prompt_text": ref_text,
+            "language": language,
+        },
+        tts_parameters={},
+        text=text,
+    )
+    assert (
+        state.input_ids
+        == tokenizer(
+            "<|Chinese|><|sot|>今天天气很好。欢迎使用点点语音合成系统。<|eot|>",
+            add_special_tokens=False,
+        )["input_ids"]
+    )
 
 
 def test_speaker_chatml_rejects_bad_ratio() -> None:
     with pytest.raises(ValueError, match="interleave_ratio"):
-        prompt_utils.compose_speaker_chatml(
+        compose_speaker_chatml(
             "<|f531_speaker|>", dual_stream=True, interleave_ratio=(0, 1)
         )
 
@@ -66,7 +91,7 @@ def test_speaker_text_expands_han_tokens_and_preserves_unknown_characters(
     text: str, expected_tokens: list[str]
 ) -> None:
     tokenizer = make_speaker_tokenizer()
-    encoded = prompt_utils.encode_speaker_text(tokenizer, text)
+    encoded = encode_speaker_text(tokenizer, text)
     assert encoded == [
         tokenizer.convert_tokens_to_ids(token) for token in expected_tokens
     ]
@@ -112,7 +137,7 @@ def test_audio_prompt_slots_follow_resampled_patch_boundaries(
     audio_url = f"{audio_server_url}/reference.wav"
     monkeypatch.setenv("REQUEST_TIMEOUT", "1")
     with patch(
-        "sglang_omni.models.firered_tts3.instruct.urlopen", wraps=urlopen
+        "sglang_omni.models.firered_tts3.task_prompts.urlopen", wraps=urlopen
     ) as open_audio_url:
         for reference in (str(audio_path), audio_uri, permissive_audio_uri, audio_url):
             assert (
@@ -148,18 +173,26 @@ def test_audio_prompt_count_preserves_source_errors(
 
 def test_compose_acoustic_instruction_templates() -> None:
     assert (
-        prompt_utils.compose_acoustic_instruction("Speed", 0.8)
+        resolve_acoustic_instruction(
+            None, {}, {"acoustic_attribute": "Speed", "acoustic_value": 0.8}
+        )
         == "adjust the speed to 0.8x"
     )
     assert (
-        prompt_utils.compose_acoustic_instruction("Volume", 1.5)
+        resolve_acoustic_instruction(
+            None, {}, {"acoustic_attribute": "Volume", "acoustic_value": 1.5}
+        )
         == "adjust the volume to 1.5"
     )
     assert (
-        prompt_utils.compose_acoustic_instruction("Pitch", 2)
+        resolve_acoustic_instruction(
+            None, {}, {"acoustic_attribute": "Pitch", "acoustic_value": 2}
+        )
         == "shift the pitch by 2 steps"
     )
     assert (
-        prompt_utils.compose_acoustic_instruction("Pitch", -1)
+        resolve_acoustic_instruction(
+            None, {}, {"acoustic_attribute": "Pitch", "acoustic_value": -1}
+        )
         == "shift the pitch by -1 step"
     )

@@ -10,8 +10,8 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from sglang_omni.models.firered_tts3.istft import ISTFT
 from sglang_omni.models.firered_tts3.redae_decoder import (
+    ISTFT,
     RedAEAudioDecoder,
     rematerialize_istft_window,
 )

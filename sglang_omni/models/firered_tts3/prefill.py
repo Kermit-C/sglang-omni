@@ -6,10 +6,6 @@ from __future__ import annotations
 import torch
 
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
-from sglang_omni.models.firered_tts3.prompt_utils import (
-    LATENT_IN_PAD_ID,
-    LATENT_OUT_PAD_ID,
-)
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     DS_STAGE_PATCH,
@@ -20,6 +16,9 @@ from sglang_omni.models.firered_tts3.request_builders import (
     FlowState,
 )
 from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
+
+LATENT_IN_PAD_ID = 151655
+LATENT_OUT_PAD_ID = 151656
 
 
 def build_base_prefill_embeds(
