@@ -68,24 +68,26 @@ def prefill(
     runner: FireRedTTS3ModelRunner, request: SchedulerRequest, sampled: int = 123
 ) -> int:
     request_data = request.data
-    request_data.req.set_extend_range(
-        0, request_data.prefill_len + len(request_data.req.output_ids)
+    request_data.req.prefix_len = 0
+    request_data.req.extend_end = request_data.prefill_len + len(
+        request_data.req.output_ids
     )
-    result = make_result(request_data.req.extend_range.length, sampled)
+    result = make_result(request_data.req.extend_len, sampled)
     runner.post_prefill(result, None, None, [request])
     return int(result.next_token_ids[0])
 
 
 def replay(runner: FireRedTTS3ModelRunner, request: SchedulerRequest) -> torch.Tensor:
     request_data = request.data
-    request_data.req.set_extend_range(
-        0, request_data.prefill_len + len(request_data.req.output_ids)
+    request_data.req.prefix_len = 0
+    request_data.req.extend_end = request_data.prefill_len + len(
+        request_data.req.output_ids
     )
     batch = SimpleNamespace(
-        input_ids=torch.zeros(request_data.req.extend_range.length, dtype=torch.long)
+        input_ids=torch.zeros(request_data.req.extend_len, dtype=torch.long)
     )
     runner.before_prefill(batch, None, [request])
-    assert batch.input_embeds.shape == (request_data.req.extend_range.length, 8)
+    assert batch.input_embeds.shape == (request_data.req.extend_len, 8)
     return batch.input_embeds
 
 
@@ -97,7 +99,7 @@ def test_single_history_invariant_at_every_pause(samples: list[int]) -> None:
     request_data = request.data
     for sampled in [*samples, 0, 0, 0, 0]:
         replay(runner, request)
-        generated = request_data.req.extend_range.length - request_data.prefill_len
+        generated = request_data.req.extend_len - request_data.prefill_len
         assert (
             generated
             == len(request_data.req.output_ids)

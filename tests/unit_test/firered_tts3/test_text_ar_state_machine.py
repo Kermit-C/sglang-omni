@@ -44,7 +44,8 @@ def make_request(
     request.data.state.variant = "instruct"
     request.data.state.task_type = task_type
     request.data.text_ar_mode = TEXT_MODE_TEXT
-    request.data.req.set_extend_range(0, 1)
+    request.data.req.prefix_len = 0
+    request.data.req.extend_end = 1
     return request
 
 

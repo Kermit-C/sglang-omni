@@ -229,8 +229,8 @@ class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
                         request_embeddings.append(replay_embeddings)
                     else:
                         pass
-                prefix_token_count = len(request_data.req.prefix_indices)
-                request_token_count = int(request_data.req.extend_range.length)
+                prefix_token_count = request_data.req.prefix_len
+                request_token_count = request_data.req.extend_len
                 generated_token_count = request_token_count - request_data.prefill_len
                 assert (
                     prefix_token_count == 0
@@ -420,7 +420,7 @@ class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
         flow_rows: list[FlowRow] | None = [] if self.flow_batching else None
         for request_row_index, request in enumerate(requests):
             request_data = request.data
-            request_token_count = int(request_data.req.extend_range.length)
+            request_token_count = request_data.req.extend_len
             request_hidden = hidden_states[
                 hidden_row_offset : hidden_row_offset + request_token_count
             ]

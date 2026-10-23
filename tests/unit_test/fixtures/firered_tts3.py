@@ -402,7 +402,8 @@ def make_flow_request(
         latent_history=torch.zeros(1, 8, 64),
         patch_count=6 if stopped else 0,
     )
-    request_data.req.set_extend_range(0, request_data.prefill_len)
+    request_data.req.prefix_len = 0
+    request_data.req.extend_end = request_data.prefill_len
     return SchedulerRequest(request_id=payload.request_id, data=request_data)
 
 
