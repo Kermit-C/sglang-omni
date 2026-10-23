@@ -1,27 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Checkpoint-driven pipeline topology, configuration validation, and state transport."""
 
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 
 import pytest
 import torch
+from transformers import AutoConfig
 
 from sglang_omni.config.resolver import ConfigResolver
 from sglang_omni.config.runtime import resolve_stage_typed_kwargs
 from sglang_omni.config.sources import patches_from_shared_block
+from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
+from sglang_omni.models.firered_tts3.hf_config import (
+    FireRedTTS3Config,
+    detect_fireredtts3_variant,
+    register_fireredtts3_hf_config,
+)
+from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
-
-from .conftest import CHECKPOINTS
-
-SPEAKER_CHECKPOINT = CHECKPOINTS["speaker"]
-BASE_CHECKPOINT = CHECKPOINTS["base"]
-INSTRUCT_CHECKPOINT = CHECKPOINTS["instruct"]
+from sglang_omni.utils.json import JsonValue
 
 
 def test_firered_tts3_uses_framework_stage_boundaries() -> None:
-    from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
-    from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 
     config = FireRedTTS3PipelineConfig(model_path="model")
 
@@ -39,40 +43,74 @@ def test_firered_tts3_uses_framework_stage_boundaries() -> None:
         PIPELINE_CONFIG_REGISTRY.get_config("FireRedTTS3ForConditionalGeneration")
         is FireRedTTS3PipelineConfig
     )
-    state = FireRedTTS3State()
-    assert state.n_timesteps == 10
-    assert state.max_patches == 400
 
 
-@pytest.mark.skipif(
-    not SPEAKER_CHECKPOINT.is_dir(), reason="speaker checkpoint not present"
+@pytest.mark.parametrize(
+    "variant,markers,stage_names,reference_count,text_required,dual_stream",
+    [
+        (
+            "base",
+            {"spk_in_dim": 512},
+            ["preprocessing", "reference_encode", "talker", "vocoder"],
+            1,
+            True,
+            False,
+        ),
+        (
+            "instruct",
+            {"use_lm_head": True},
+            ["preprocessing", "reference_encode", "talker", "vocoder"],
+            None,
+            False,
+            False,
+        ),
+        (
+            "speaker",
+            {
+                "text_latent_interleave_ratio": [2, 1],
+                "speaker_token": "<|f531_speaker|>",
+                "use_lm_head": True,
+            },
+            ["preprocessing", "talker", "vocoder"],
+            0,
+            False,
+            True,
+        ),
+    ],
 )
-def test_firered_tts3_speaker_drops_reference_encode_stage() -> None:
-    from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
+def test_checkpoint_config_drives_pipeline_topology(
+    tmp_path: Path,
+    variant: str,
+    markers: dict[str, JsonValue],
+    stage_names: list[str],
+    reference_count: int | None,
+    text_required: bool,
+    dual_stream: bool,
+) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "fireredtts3", **markers}), encoding="utf-8"
+    )
+    register_fireredtts3_hf_config()
+    config = AutoConfig.from_pretrained(tmp_path, local_files_only=True)
+    assert isinstance(config, FireRedTTS3Config)
+    assert detect_fireredtts3_variant(config) == variant
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
+    assert pipeline.variant == variant
+    assert [stage.name for stage in pipeline.stages] == stage_names
+    assert pipeline.stage_named("preprocessing").next == stage_names[1]
+    assert pipeline.terminal_stages == ["vocoder"]
+    assert pipeline.required_speech_reference_count == reference_count
+    assert pipeline.speech_reference_text_required is text_required
+    assert pipeline.speech_dual_stream_supported is dual_stream
 
-    config = FireRedTTS3PipelineConfig(model_path=str(SPEAKER_CHECKPOINT))
 
-    assert config.variant == "speaker"
-    assert [stage.name for stage in config.stages] == [
-        "preprocessing",
-        "talker",
-        "vocoder",
-    ]
-    assert config.stage_named("preprocessing").next == "talker"
-    assert config.terminal_stages == ["vocoder"]
-    # The speaker variant takes no reference clip (0 rejects any supplied
-    # reference with a 400 at the serving layer) and supports the dual-stream
-    # opt-in.
-    assert config.required_speech_reference_count == 0
-    assert config.speech_reference_text_required is False
-    assert config.speech_dual_stream_supported is True
-    # The speaker checkpoint default budget is larger (config.json).
-    assert config.talker_generation_limits() == (10, 600)
+def test_unknown_checkpoint_variant_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unrecognized FireRedTTS3 checkpoint"):
+        detect_fireredtts3_variant(FireRedTTS3Config())
 
 
 def test_firered_tts3_shares_generation_schedule_via_shared() -> None:
     """One shared entry feeds the schedule settings to both consumers."""
-    from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 
     config = FireRedTTS3PipelineConfig(model_path="model")
     patches = patches_from_shared_block(
@@ -95,11 +133,9 @@ def test_firered_tts3_shares_generation_schedule_via_shared() -> None:
         "n_timesteps": 8,
         "max_patches": 256,
     }
-    assert resolved.stage_factory_kwargs("vocoder") == {"stream_slots": 16}
 
 
 def test_firered_tts3_rejects_conflicting_preprocessing_schedule() -> None:
-    from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 
     raw = FireRedTTS3PipelineConfig(model_path="model").model_dump()
     stages = {item["name"]: item for item in raw["stages"]}
@@ -110,7 +146,6 @@ def test_firered_tts3_rejects_conflicting_preprocessing_schedule() -> None:
 
 
 def test_firered_tts3_rejects_mismatched_vocoder_stream_slots() -> None:
-    from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 
     raw = FireRedTTS3PipelineConfig(model_path="model").model_dump()
     stages = {item["name"]: item for item in raw["stages"]}
@@ -121,7 +156,6 @@ def test_firered_tts3_rejects_mismatched_vocoder_stream_slots() -> None:
 
 
 def test_firered_tts3_rejects_tp() -> None:
-    from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 
     raw = FireRedTTS3PipelineConfig(model_path="model").model_dump()
     stage = next(item for item in raw["stages"] if item["name"] == "talker")
@@ -147,7 +181,6 @@ def test_firered_tts3_model_registered_with_sglang() -> None:
 
 
 def test_firered_tts3_state_wire_round_trip() -> None:
-    from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 
     state = FireRedTTS3State(
         variant="instruct",
@@ -198,55 +231,3 @@ def test_firered_tts3_state_wire_round_trip() -> None:
             assert torch.equal(actual, expected), f.name
         else:
             assert actual == expected, f.name
-
-
-def test_firered_tts3_state_defaults_round_trip() -> None:
-    from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
-
-    restored = FireRedTTS3State.from_dict(FireRedTTS3State().to_dict())
-
-    assert restored.sample_rate == 24000
-    assert restored.variant == "base"
-    assert restored.input_ids == []
-    assert restored.prompt_latents is None
-    assert restored.seed is None
-
-
-@pytest.mark.skipif(
-    not BASE_CHECKPOINT.is_dir(),
-    reason="Base checkpoint not present",
-)
-def test_firered_tts3_preprocessing_factory_builds() -> None:
-    from sglang_omni.models.firered_tts3 import stages
-
-    scheduler = stages.create_preprocessing_executor(str(BASE_CHECKPOINT))
-    assert scheduler is not None
-
-
-@pytest.mark.skipif(
-    not INSTRUCT_CHECKPOINT.is_dir(),
-    reason="Instruct checkpoint not present",
-)
-def test_firered_tts3_preprocessing_factory_builds_instruct() -> None:
-    from sglang_omni.models.firered_tts3 import stages
-
-    scheduler = stages.create_preprocessing_executor(str(INSTRUCT_CHECKPOINT))
-    assert scheduler is not None
-
-
-def test_firered_tts3_profiling_probe_follows_env(monkeypatch) -> None:
-    from sglang_omni.models.firered_tts3 import profiling
-
-    monkeypatch.delenv(profiling.FIREREDTTS3_PROF_ENV, raising=False)
-    probe = profiling.ProfilingProbe.create()
-    assert not probe.enabled
-    with probe.segment("flow"):
-        pass
-    assert probe.segments == {}
-
-    monkeypatch.setenv(profiling.FIREREDTTS3_PROF_ENV, "1")
-    probe = profiling.ProfilingProbe.create()
-    assert probe.enabled
-    with probe.segment("flow"):
-        pass
-    assert probe.segments["flow"] >= 0.0

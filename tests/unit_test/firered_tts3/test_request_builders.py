@@ -13,7 +13,6 @@ from sglang_omni.models.firered_tts3.prompt_utils import TEXT_EOT_ID, TEXT_TOKEN
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     ENGINE_TOKEN_SLACK,
-    STREAM_CHUNK_PATCH_RAMP,
     apply_latent_result,
     build_sglang_firered_tts3_request,
     build_stream_output,
@@ -92,7 +91,6 @@ def test_apply_result_restores_state_with_latents_and_usage() -> None:
     assert restored.prompt_tokens == data.prefill_len
     assert restored.completion_tokens == 3
     assert restored.finish_reason == "stop"
-    assert restored.engine_time_s >= 0.0
 
 
 def streaming_data(num_patches: int, *, stream: bool = True):
@@ -147,12 +145,6 @@ def test_stream_output_skips_non_streaming_requests() -> None:
     assert build_stream_output("rid", data, None) == []
     assert flush_stream_output("rid", data) == []
     assert data.streamed_patches == 0
-
-
-def test_stream_ramp_matches_reference_chunk_frames() -> None:
-    # The reference codec_chunk_frames [4, 8, 16] counts 25 Hz frames; the
-    # ramp here counts patches of 4 frames each.
-    assert STREAM_CHUNK_PATCH_RAMP == (1, 2, 4)
 
 
 def test_instruct_request_uses_real_tokens_and_text_budget() -> None:

@@ -1,13 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Backbone decode CUDA graph contract tests.
-
-The engine decode graph bakes the model's forward branch at capture time,
-so the branch may depend only on capture-visible state: the model-owned
-feedback buffer (installed before capture) switches decode forwards to the
-buffer read path, and on lm_head checkpoints (Instruct) it also pins the
-real-logits branch so text-AR steps stay samplable under replay. These
-tests pin that contract with a stubbed backbone (CPU-only).
-"""
+"""Backbone decode CUDA graph contract tests."""
 
 from __future__ import annotations
 
@@ -21,6 +13,9 @@ from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 
 HIDDEN_SIZE = 8
 BATCH_SIZE = 3
+PATCH_SIZE = 4
+REDAE_DIM = 64
+SPK_DIM = 512
 
 
 def build_model(*, use_lm_head: bool, with_buffer: bool) -> FireRedTTS3SGLangModel:

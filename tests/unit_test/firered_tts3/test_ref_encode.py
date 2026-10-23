@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Reference-conditioning cache tests: hit accounting, artifact isolation,
-the edit-cap key split, and the cache kill switch."""
+"""Reference cache isolation, edit-cap keys, and encoder warmup."""
 
 from __future__ import annotations
 

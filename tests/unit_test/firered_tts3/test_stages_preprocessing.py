@@ -6,19 +6,12 @@ from __future__ import annotations
 import pytest
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
-from sglang_omni.models.firered_tts3.prompt_utils import (
-    TEXT_TOKEN_BUDGET,
-    compose_acoustic_edit,
-    compose_base_text,
-    compose_semantic_edit,
-    compose_tts,
-    compose_voice_design,
-)
-from sglang_omni.models.firered_tts3.request_builders import ENGINE_TOKEN_SLACK
+from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
+from sglang_omni.models.firered_tts3.prompt_utils import compose_base_text
 from sglang_omni.models.firered_tts3.stages import preprocess_firered_tts3_payload
 from sglang_omni.proto import OmniRequest, StagePayload
-
-from .conftest import CHECKPOINTS
+from sglang_omni.utils.json import JsonValue
+from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
 
 
 class RecordingTokenizer:
@@ -67,8 +60,11 @@ def preprocess(payload: StagePayload, **factory_kwargs):
     return tokenizer, payload.data
 
 
-def test_preprocessing_composes_base_template() -> None:
-    tokenizer, data = preprocess(make_payload())
+@pytest.mark.parametrize("max_patches,engine_tokens", [(400, 420), (256, 276)])
+def test_preprocessing_composes_base_template(
+    max_patches: int, engine_tokens: int
+) -> None:
+    tokenizer, data = preprocess(make_payload(), max_patches=max_patches)
     expected = compose_base_text(
         "Chinese", "今天天气很好。", "欢迎使用点点语音合成系统。"
     )
@@ -83,8 +79,8 @@ def test_preprocessing_composes_base_template() -> None:
     assert data["inference_cfg"] == 2.0
     assert data["stop_threshold"] == 0.5
     assert data["min_patches"] == 6
-    assert data["max_patches"] == 400
-    assert data["max_engine_tokens"] == 400 + ENGINE_TOKEN_SLACK
+    assert data["max_patches"] == max_patches
+    assert data["max_engine_tokens"] == engine_tokens
     assert data["sample_rate"] == 24000
 
 
@@ -127,12 +123,6 @@ def test_preprocessing_accepts_streaming_and_bad_language_rejected() -> None:
     assert data["language"] == "ZH_Shanghai"
 
 
-def test_preprocessing_budget_follows_max_patches() -> None:
-    _tokenizer, data = preprocess(make_payload(), max_patches=256)
-    assert data["max_patches"] == 256
-    assert data["max_engine_tokens"] == 256 + ENGINE_TOKEN_SLACK
-
-
 INSTRUCT_CONFIG = FireRedTTS3Config(use_lm_head=True, dit_in_channels=1088)
 
 
@@ -172,108 +162,6 @@ def instruct_payload(
     return make_payload(inputs=inputs, params=params or {}, tts_params=tts_params)
 
 
-def test_instruct_tts_composes_chatml_with_icl_slots(monkeypatch) -> None:
-    tokenizer, data = preprocess_instruct(
-        instruct_payload(with_reference=True), monkeypatch, patches=18
-    )
-    expected = compose_tts(18, "源音频文本。", "晚上好，欢迎收听今天的节目。")
-    assert tokenizer.encoded_texts == [expected]
-    assert data["variant"] == "instruct"
-    assert data["task_type"] == "tts"
-    assert data["prompt_audio_path"] == "edit.wav"
-    assert data["prompt_text"] == "源音频文本。"
-    assert data.get("audio_in_path") is None
-    assert data["inference_cfg"] == 2.0
-    assert data["text_temperature"] == 0.0
-    assert data["max_engine_tokens"] == 400 + ENGINE_TOKEN_SLACK
-
-
-def test_instruct_voice_design_samples_text(monkeypatch) -> None:
-    tokenizer, data = preprocess_instruct(
-        instruct_payload(task_type="VoiceDesign", instructions="a calm deep voice"),
-        monkeypatch,
-    )
-    expected = compose_voice_design("a calm deep voice", "晚上好，欢迎收听今天的节目。")
-    assert tokenizer.encoded_texts == [expected]
-    assert data["task_type"] == "voice_design"
-    assert data.get("prompt_audio_path") is None
-    assert data["inference_cfg"] == 1.2
-    assert (data["text_temperature"], data["text_top_p"], data["text_top_k"]) == (
-        0.7,
-        0.8,
-        20,
-    )
-    # Text phase budget: 200 text tokens + finalize + sosp transition feeds.
-    assert data["max_engine_tokens"] == 400 + ENGINE_TOKEN_SLACK + TEXT_TOKEN_BUDGET + 2
-
-
-def test_instruct_semantic_edit_ignores_input_text(monkeypatch) -> None:
-    tokenizer, data = preprocess_instruct(
-        instruct_payload(
-            task_type="SemanticEdit",
-            instructions="Replace '公园' with '游乐园'.",
-            text="",
-            with_reference=True,
-        ),
-        monkeypatch,
-        patches=18,
-    )
-    expected = compose_semantic_edit("Replace '公园' with '游乐园'.", 18)
-    assert tokenizer.encoded_texts == [expected]
-    assert data["task_type"] == "semantic_edit"
-    assert data["audio_in_path"] == "edit.wav"
-    assert data.get("prompt_audio_path") is None
-    assert data["inference_cfg"] == 1.2
-    assert data["text_temperature"] == 0.0
-    assert data["max_engine_tokens"] == 400 + ENGINE_TOKEN_SLACK + TEXT_TOKEN_BUDGET + 2
-
-
-def test_instruct_acoustic_edit_maps_speed_to_template(monkeypatch) -> None:
-    tokenizer, data = preprocess_instruct(
-        instruct_payload(
-            task_type="AcousticEdit",
-            text="",
-            with_reference=True,
-            tts_params={"speed": 0.8},
-        ),
-        monkeypatch,
-        patches=18,
-    )
-    expected = compose_acoustic_edit("adjust the speed to 0.8x", 18)
-    assert tokenizer.encoded_texts == [expected]
-    assert data["task_type"] == "acoustic_edit"
-    assert data["audio_in_path"] == "edit.wav"
-    assert data["inference_cfg"] == 1.2
-    # No text phase: the budget is the plain audio one.
-    assert data["max_engine_tokens"] == 400 + ENGINE_TOKEN_SLACK
-
-
-def test_instruct_acoustic_edit_pitch_volume_via_stage_params(monkeypatch) -> None:
-    _tokenizer, data = preprocess_instruct(
-        instruct_payload(
-            task_type="AcousticEdit",
-            text="",
-            with_reference=True,
-            params={
-                "stage_params": {
-                    "preprocessing": {
-                        "acoustic_attribute": "Pitch",
-                        "acoustic_value": -2,
-                    }
-                }
-            },
-        ),
-        monkeypatch,
-    )
-    assert data["audio_in_path"] == "edit.wav"
-    # The raw instruction is composed from the fixed trained template.
-    from sglang_omni.models.firered_tts3.prompt_utils import (
-        compose_acoustic_instruction,
-    )
-
-    assert compose_acoustic_instruction("Pitch", -2) == "shift the pitch by -2 steps"
-
-
 def test_instruct_task_validation(monkeypatch) -> None:
     with pytest.raises(ValueError, match="task_type"):
         preprocess_instruct(instruct_payload(task_type="Base2"), monkeypatch)
@@ -305,7 +193,6 @@ def test_instruct_task_validation(monkeypatch) -> None:
 @pytest.mark.parametrize(
     "sampling_overrides, expected_sampling",
     [
-        ({}, (0.7, 0.8, 20)),
         ({"temperature": 0.0}, (0.0, 0.8, 20)),
         ({"top_p": 0.5, "top_k": 5}, (0.7, 0.5, 5)),
     ],
@@ -347,18 +234,6 @@ SPEAKER_CONFIG = FireRedTTS3Config(
 )
 
 
-def make_speaker_tokenizer():
-
-    import pytest
-
-    checkpoint = CHECKPOINTS["speaker"]
-    if not checkpoint.is_dir():
-        pytest.skip("speaker checkpoint not present")
-    from transformers import AutoTokenizer
-
-    return AutoTokenizer.from_pretrained(str(checkpoint), local_files_only=True)
-
-
 def preprocess_speaker(
     payload: StagePayload, *, tokenizer=None, max_patches: int = 600
 ):
@@ -378,81 +253,55 @@ def speaker_payload(**kwargs) -> StagePayload:
     return make_payload(**kwargs)
 
 
-def test_speaker_prefill_form_composition() -> None:
-    from sglang_omni.models.firered_tts3.prompt_utils import (
-        encode_speaker_prefill_ids,
-        resolve_speaker_token_id,
-    )
-
+@pytest.mark.parametrize("dual_stream,budget", [(False, 620), (True, 1820)])
+def test_speaker_preprocessing_composes_prompt_and_budget(
+    dual_stream: bool, budget: int
+) -> None:
     tokenizer = make_speaker_tokenizer()
-    data = preprocess_speaker(speaker_payload(), tokenizer=tokenizer)
-    text = "晚上好，欢迎收听今天的节目。"
+    data = preprocess_speaker(
+        speaker_payload(inputs={"text": "你 好"}, params={"dual_stream": dual_stream}),
+        tokenizer=tokenizer,
+    )
     assert data["variant"] == "speaker"
     assert data["task_type"] == "tts"
-    assert data["dual_stream"] is False
-    assert data["text_stream_ids"] == []
-    assert data["text_pad_id"] == -1
-    assert data["input_ids"] == encode_speaker_prefill_ids(
-        tokenizer, text=text, speaker_token="<|f531_speaker|>"
-    )
-    holder_id = resolve_speaker_token_id(tokenizer, "<|text_holder|>")
-    assert holder_id not in data["input_ids"]  # all slots were substituted
-    # Prefill form budget: max_patches + slack; generation defaults from the
-    # checkpoint (the Instruct per-task CFG table does not apply).
+    assert data["dual_stream"] is dual_stream
     assert data["inference_cfg"] == 1.2
-    assert data["max_engine_tokens"] == 620
+    assert data["max_engine_tokens"] == budget
     assert data["max_patches"] == 600
-
-
-def test_speaker_dual_stream_form_composition() -> None:
-    from sglang_omni.models.firered_tts3.prompt_utils import (
-        encode_speaker_dual_stream_prompt,
+    if dual_stream:
+        user_prompt = "Use a中性 tone. Align the interleaved text and speech chunks."
+        assert data["text_stream_ids"] == [
+            tokenizer.convert_tokens_to_ids(char) for char in "你好"
+        ]
+        assert data["text_pad_id"] == tokenizer.convert_tokens_to_ids("<|text_pad|>")
+    else:
+        user_prompt = "Convert text to speech.\n你好"
+        assert data["text_stream_ids"] == []
+        assert data["text_pad_id"] == -1
+    expected = (
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+        f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n<|f531_speaker|><|audio_start|>"
     )
-
-    tokenizer = make_speaker_tokenizer()
-    text = "晚上好，欢迎收听今天的节目。"
-    data = preprocess_speaker(
-        speaker_payload(params={"dual_stream": True}), tokenizer=tokenizer
-    )
-    prompt_ids, text_ids, text_pad_id = encode_speaker_dual_stream_prompt(
-        tokenizer, text=text, speaker_token="<|f531_speaker|>"
-    )
-    assert data["dual_stream"] is True
-    assert data["input_ids"] == prompt_ids
-    assert data["text_stream_ids"] == text_ids
-    assert data["text_pad_id"] == text_pad_id
-    # The prompt stops at <|audio_start|>; the text rides the payload.
-    assert len(data["input_ids"]) < 60
-    # Dual-stream budget: ceil(3 * max_patches) + slack.
-    assert data["max_engine_tokens"] == 1820
+    assert tokenizer.decode(data["input_ids"]) == expected
+    assert tokenizer.convert_tokens_to_ids("<|text_holder|>") not in data["input_ids"]
 
 
 def test_speaker_dual_stream_style_passthrough() -> None:
-    from sglang_omni.models.firered_tts3.prompt_utils import (
-        compose_speaker_chatml,
-        encode_speaker_text,
-    )
-
     tokenizer = make_speaker_tokenizer()
-    data = preprocess_speaker(
+    styled = preprocess_speaker(
         speaker_payload(params={"dual_stream": True, "style": "Use a 活泼 tone."}),
         tokenizer=tokenizer,
     )
-    expected = compose_speaker_chatml(
-        "<|f531_speaker|>",
-        style="Use a 活泼 tone.",
-        dual_stream=True,
-        interleave_ratio=(2, 1),
-    )
-    assert data["input_ids"] == encode_speaker_text(tokenizer, expected)
-
-    # Style is a dual-stream-only prefix (reference parity); the prefill form
-    # ignores it.
+    prompt = tokenizer.decode(styled["input_ids"])
+    assert "Use a活泼 tone. Align the interleaved text and speech chunks." in prompt
+    assert "Use a中性 tone." not in prompt
     plain = preprocess_speaker(speaker_payload(), tokenizer=tokenizer)
-    styled = preprocess_speaker(
-        speaker_payload(params={"style": "Use a 活泼 tone."}), tokenizer=tokenizer
+    styled_prefill = preprocess_speaker(
+        speaker_payload(params={"style": "Use a 活泼 tone."}),
+        tokenizer=tokenizer,
     )
-    assert styled["input_ids"] == plain["input_ids"]
+    assert styled_prefill["input_ids"] == plain["input_ids"]
 
 
 def test_speaker_rejects_references_and_foreign_tasks() -> None:
@@ -473,28 +322,124 @@ def test_speaker_rejects_references_and_foreign_tasks() -> None:
         preprocess_speaker(speaker_payload(inputs={"text": "  "}))
 
 
-def test_speaker_dual_stream_requires_capability() -> None:
-    base_config = FireRedTTS3Config(spk_in_dim=512, dit_in_channels=1600)
-    payload = speaker_payload(params={"dual_stream": True})
-    # A Base checkpoint routed through the speaker composer is impossible via
-    # detect_fireredtts3_variant; engine_token_budget still guards the budget.
-    from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
-    from sglang_omni.models.firered_tts3.stages import engine_token_budget
-
-    del base_config
-    with pytest.raises(ValueError, match="text_latent_interleave_ratio"):
-        engine_token_budget(FireRedTTS3State(dual_stream=True, max_patches=600))
-    assert (
-        engine_token_budget(
-            FireRedTTS3State(dual_stream=True, max_patches=600),
-            interleave_ratio=(2, 1),
-        )
-        == 1820
-    )
-
-
 def test_speaker_max_new_tokens_override() -> None:
     data = preprocess_speaker(
         speaker_payload(params={"dual_stream": True, "max_new_tokens": 300})
     )
     assert data["max_engine_tokens"] == 300
+
+
+@pytest.mark.parametrize(
+    "task,instructions,params,tts_params,user_instruction,engine_tokens,sampling",
+    [
+        (
+            "tts",
+            None,
+            {},
+            {},
+            "Convert text to speech.\n源音频文本。晚上好，欢迎收听今天的节目。",
+            420,
+            (0.0, None, None),
+        ),
+        (
+            "VoiceDesign",
+            "a calm deep voice",
+            {},
+            {},
+            "a calm deep voice\n\n根据上述音色描述，首先整理成语音属性，再合成以下文本对应的音频：\n晚上好，欢迎收听今天的节目。",
+            622,
+            (0.7, 0.8, 20),
+        ),
+        (
+            "SemanticEdit",
+            "Replace '公园' with '游乐园'.",
+            {},
+            {},
+            "Identify the content of the audio. Replace '公园' with '游乐园'.",
+            622,
+            (0.0, None, None),
+        ),
+        (
+            "AcousticEdit",
+            None,
+            {},
+            {"speed": 0.8},
+            "adjust the speed to 0.8x",
+            420,
+            (0.0, None, None),
+        ),
+        (
+            "AcousticEdit",
+            None,
+            {
+                "stage_params": {
+                    "preprocessing": {
+                        "acoustic_attribute": "Pitch",
+                        "acoustic_value": -2,
+                    }
+                }
+            },
+            {},
+            "shift the pitch by -2 steps",
+            420,
+            (0.0, None, None),
+        ),
+    ],
+)
+def test_instruct_preprocessing_routes_tasks_to_model_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+    task: str,
+    instructions: str | None,
+    params: dict[str, JsonValue],
+    tts_params: dict[str, JsonValue],
+    user_instruction: str,
+    engine_tokens: int,
+    sampling: tuple[float, float | None, int | None],
+) -> None:
+    is_edit = task in ("SemanticEdit", "AcousticEdit")
+    tokenizer, serialized_state = preprocess_instruct(
+        instruct_payload(
+            task_type=None if task == "tts" else task,
+            instructions=instructions,
+            text="" if is_edit else "晚上好，欢迎收听今天的节目。",
+            with_reference=task != "VoiceDesign",
+            params=params,
+            tts_params=tts_params,
+        ),
+        monkeypatch,
+    )
+    state = FireRedTTS3State.from_dict(serialized_state)
+    audio_input = "<|sosp|>" + "<|image_pad|>" * 18 + "<|eosp|>\n" if is_edit else ""
+    if task == "tts":
+        assistant_prefix = "<|sosp|>" + "<|video_pad|>" * 18
+        assert state.prompt_audio_path == "edit.wav"
+        assert state.prompt_text == "源音频文本。"
+    elif task == "AcousticEdit":
+        assistant_prefix = "<|sosp|>"
+    else:
+        assistant_prefix = "<|sot|>"
+    expected = (
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+        f"<|im_start|>user\n{audio_input}{user_instruction} /no_think<|im_end|>\n"
+        f"<|im_start|>assistant\n<think>\n\n</think>\n\n{assistant_prefix}"
+    )
+    assert tokenizer.encoded_texts == [expected]
+    assert state.variant == "instruct"
+    assert (
+        state.task_type
+        == {
+            "tts": "tts",
+            "VoiceDesign": "voice_design",
+            "SemanticEdit": "semantic_edit",
+            "AcousticEdit": "acoustic_edit",
+        }[task]
+    )
+    assert state.audio_in_path == ("edit.wav" if is_edit else None)
+    assert state.prompt_audio_path == ("edit.wav" if task == "tts" else None)
+    assert state.inference_cfg == (2.0 if task == "tts" else 1.2)
+    assert state.max_engine_tokens == engine_tokens
+    assert (
+        state.text_temperature,
+        state.text_top_p,
+        state.text_top_k,
+    ) == sampling

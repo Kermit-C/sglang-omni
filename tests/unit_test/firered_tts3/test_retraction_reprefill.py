@@ -32,35 +32,7 @@ from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     FireRedTTS3SGLangRequestData,
 )
-
-
-class ReplayModel(torch.nn.Module):
-    """Small CPU model that records which patches replay consumed."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.weight = torch.nn.Parameter(torch.zeros(1))
-        self.history_length = 4
-        self.history_patches = 2
-        self.redae_dim = 64
-        self.llm_hidden_size = 8
-        self.spk_proj_dit = None
-        self.graph_feedback_buffer = None
-        self.encoded_patches: list[torch.Tensor] = []
-
-    def get_input_embeddings(self) -> Mock:
-        return Mock(
-            side_effect=lambda ids: ids.float().unsqueeze(-1).expand(*ids.shape, 8)
-        )
-
-    def patch_encoder(self, patches: torch.Tensor) -> torch.Tensor:
-        self.encoded_patches.append(patches)
-        return (
-            patches.reshape(1, -1, 4, 64)
-            .mean(dim=(2, 3))
-            .unsqueeze(-1)
-            .expand(-1, -1, 8)
-        )
+from tests.unit_test.fixtures.firered_tts3 import ReplayModel
 
 
 def make_runner(*, batching: bool = False) -> FireRedTTS3ModelRunner:
@@ -149,7 +121,7 @@ def prefill(
     return int(result.next_token_ids[0])
 
 
-def replay(runner: FireRedTTS3ModelRunner, request: SimpleNamespace) -> None:
+def replay(runner: FireRedTTS3ModelRunner, request: SimpleNamespace) -> torch.Tensor:
     data = request.data
     data.req.extend_range.length = data.prefill_len + len(data.req.output_ids)
     batch = SimpleNamespace(
@@ -157,47 +129,11 @@ def replay(runner: FireRedTTS3ModelRunner, request: SimpleNamespace) -> None:
     )
     runner.before_prefill(batch, None, [request])
     assert batch.input_embeds.shape == (data.req.extend_range.length, 8)
+    return batch.input_embeds
 
 
 @pytest.mark.parametrize(
-    ("mode", "next_mode", "output_ids"),
-    [
-        (TEXT_MODE_FINALIZE, TEXT_MODE_SOSP, [101, TEXT_EOT_ID]),
-        (TEXT_MODE_SOSP, TEXT_MODE_AUDIO_ZERO, [101, TEXT_EOT_ID, AUDIO_SOS_ID]),
-    ],
-)
-def test_transition_reprefill_has_no_flow(
-    mode: str, next_mode: str, output_ids: list[int]
-) -> None:
-    runner, request = make_runner(), make_request()
-    data = request.data
-    data.text_ar_mode, data.eot_sampled, data.text_token_ids = mode, True, [101]
-    data.req.output_ids = output_ids
-    cond = data.flow_state.backbone_cond
-    assert prefill(runner, request) == AUDIO_SOS_ID
-    assert data.text_ar_mode == next_mode
-    runner.prepare_flow_row.assert_not_called()
-    runner.stop_predicted.assert_not_called()
-    assert data.flow_state.backbone_cond is cond
-
-
-def test_audio_zero_reprefill_fires_first_flow() -> None:
-    runner, request = make_runner(), make_request()
-    data = request.data
-    data.text_ar_mode, data.eot_sampled, data.text_token_ids = (
-        TEXT_MODE_AUDIO_ZERO,
-        True,
-        [101],
-    )
-    data.req.output_ids = [101, TEXT_EOT_ID, AUDIO_SOS_ID, AUDIO_SOS_ID]
-    assert prefill(runner, request) == CONTROL_TOKEN_ID
-    assert data.text_ar_mode == TEXT_MODE_AUDIO
-    assert runner.prepare_flow_row.call_count == 1
-    assert data.flow_state.patch_count == 1
-
-
-@pytest.mark.parametrize(
-    "samples", [[TEXT_EOT_ID], [101, 102, TEXT_EOT_ID], [101] * TEXT_TOKEN_BUDGET]
+    "samples", [[TEXT_EOT_ID], [101, TEXT_EOT_ID], [101] * TEXT_TOKEN_BUDGET]
 )
 def test_single_history_invariant_at_every_pause(samples: list[int]) -> None:
     runner, request = make_runner(), make_request()
@@ -210,7 +146,25 @@ def test_single_history_invariant_at_every_pause(samples: list[int]) -> None:
             == len(data.req.output_ids)
             == len(data.latent_patches) + runner.text_output_tokens(data)
         )
-        data.req.output_ids.append(prefill(runner, request, sampled))
+        previous_mode = data.text_ar_mode
+        previous_cond = data.flow_state.backbone_cond
+        runner.prepare_flow_row.reset_mock()
+        token = prefill(runner, request, sampled)
+        if previous_mode in (TEXT_MODE_FINALIZE, TEXT_MODE_SOSP):
+            assert token == AUDIO_SOS_ID
+            assert data.text_ar_mode == (
+                TEXT_MODE_SOSP
+                if previous_mode == TEXT_MODE_FINALIZE
+                else TEXT_MODE_AUDIO_ZERO
+            )
+            assert data.flow_state.backbone_cond is previous_cond
+            runner.prepare_flow_row.assert_not_called()
+        elif previous_mode == TEXT_MODE_AUDIO_ZERO:
+            assert token == CONTROL_TOKEN_ID and data.text_ar_mode == TEXT_MODE_AUDIO
+            assert runner.prepare_flow_row.call_count == 1
+        else:
+            pass
+        data.req.output_ids.append(token)
     assert data.text_ar_mode == TEXT_MODE_AUDIO
     assert len(data.latent_patches) == 2
     replay(runner, request)
@@ -296,20 +250,6 @@ def test_dual_history_and_replay_invariants_at_every_pause(
     assert (data.ds_stage, data.ds_index) == (DS_STAGE_TEXT, 0)
 
 
-def test_dual_first_prefill_preserves_unused_prompt_tail() -> None:
-    runner, request = make_runner(), make_request(dual=True)
-    data = request.data
-    runner.dual_stream_cond_rows = Mock(wraps=runner.dual_stream_cond_rows)
-    cond = data.flow_state.backbone_cond
-    assert data.req.output_ids == []
-    assert prefill(runner, request) == data.state.text_stream_ids[0]
-    assert (data.ds_stage, data.ds_index, data.text_pos) == (DS_STAGE_TEXT, 0, 1)
-    assert data.flow_state.backbone_cond is cond
-    runner.dual_stream_cond_rows.assert_not_called()
-    runner.prepare_flow_row.assert_not_called()
-    runner.stop_predicted.assert_not_called()
-
-
 @pytest.mark.parametrize("dual", [False, True])
 def test_prefill_stop_finishes_on_next_sync_decode(dual: bool) -> None:
     runner, request = make_runner(), make_request(dual=dual, task_type="tts")
@@ -360,3 +300,74 @@ def test_pending_stop_resolve_ownership(defer_stop: bool, status: str) -> None:
     assert int(result.next_token_ids[0]) == CONTROL_TOKEN_ID
     runner.prepare_flow_row.assert_not_called()
     runner.stop_predicted.assert_not_called()
+
+
+def make_stopped_request(
+    *, dual: bool, batching: bool = False
+) -> tuple[FireRedTTS3ModelRunner, SimpleNamespace]:
+    runner, request = make_runner(batching=batching), make_request(
+        dual=dual, task_type="tts"
+    )
+    data = request.data
+    if dual:
+        data.req.output_ids.append(prefill(runner, request))
+        for _ in range(5):
+            result = make_result(1)
+            runner.post_decode(result, None, None, [request])
+            data.req.output_ids.append(int(result.next_token_ids[0]))
+        assert (data.ds_stage, data.ds_index) == (DS_STAGE_PATCH, 2)
+    replay(runner, request)
+    runner.stop_predicted.return_value = True
+    data.req.output_ids.append(prefill(runner, request))
+    assert data.stop_pending and data.req.finished_reason is None
+    assert len(data.latent_patches) == (3 if dual else 0)
+    runner.prepare_flow_row.reset_mock()
+    runner.run_flow_rows.reset_mock()
+    runner.stop_predicted.reset_mock()
+    return runner, request
+
+
+@pytest.mark.parametrize("dual", [False, True])
+@pytest.mark.parametrize("batching", [False, True])
+def test_deferred_stop_survives_repeated_retraction_until_decode(
+    dual: bool, batching: bool
+) -> None:
+    """Retraction after a prefill stop must not generate patches or consume control feeds as audio."""
+    runner, request = make_stopped_request(dual=dual, batching=batching)
+    data = request.data
+    machine = (data.text_ar_mode, data.ds_stage, data.ds_index, data.text_pos)
+    patches = tuple(data.latent_patches)
+    for excess in range(1, 5):
+        output_ids = list(data.req.output_ids)
+        rows = replay(runner, request)[data.prefill_len :]
+        expected = runner.model.get_input_embeddings()(
+            torch.full((excess,), CONTROL_TOKEN_ID, dtype=torch.long)
+        )
+        torch.testing.assert_close(rows[-excess:], expected)
+        cond = data.flow_state.backbone_cond
+        assert prefill(runner, request) == CONTROL_TOKEN_ID
+        assert data.flow_state.backbone_cond is cond
+        assert data.req.output_ids == output_ids
+        assert (
+            data.text_ar_mode,
+            data.ds_stage,
+            data.ds_index,
+            data.text_pos,
+        ) == machine
+        assert len(data.latent_patches) == len(patches)
+        for actual, original in zip(data.latent_patches, patches, strict=True):
+            assert torch.equal(actual, original)
+        assert not data.pending_feedback_queue
+        assert data.stop_pending and data.req.finished_reason is None
+        data.req.output_ids.append(CONTROL_TOKEN_ID)
+    replay(runner, request)
+    runner.prepare_flow_row.assert_not_called()
+    runner.run_flow_rows.assert_not_called()
+    runner.stop_predicted.assert_not_called()
+    forward = SimpleNamespace(input_ids=torch.tensor([CONTROL_TOKEN_ID]))
+    runner.before_decode(forward, None, [request])
+    assert forward.input_embeds.shape == (1, 8)
+    runner.post_decode(make_result(1), None, None, [request])
+    assert isinstance(data.req.finished_reason, FINISH_MATCHED_TOKEN)
+    assert not data.stop_pending
+    runner.prepare_flow_row.assert_not_called()

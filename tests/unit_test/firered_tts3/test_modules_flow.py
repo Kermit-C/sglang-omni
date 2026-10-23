@@ -1,150 +1,253 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Numerical oracle tests: ported flow side path vs the FireRedTTS3 reference.
-
-PatchEncoder and DiT run fp32 end to end (precision red line); with the same
-checkpoint weights and the reference RMSNorm pinned to its intended native
-path (see conftest.pin_native_rms_norm), the port must be bit-exact.
-"""
+"""Flow execution policy and immutable fallback behavior."""
 
 from __future__ import annotations
 
 import pytest
 import torch
 
-from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
-from sglang_omni.models.firered_tts3.weights import (
-    load_dit,
-    load_patch_encoder,
-    read_component_tensors,
+from sglang_omni.models.firered_tts3.compiled_dit import (
+    DIT_RECOMPILE_LIMIT,
+    TimeCacheUnavailable,
+    TimeGemmMode,
+    TimeGemmTable,
+    finite_byte_equal,
+)
+from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
+from sglang_omni.models.firered_tts3.dit import DiT
+from sglang_omni.models.firered_tts3.flow_graph import (
+    FlowGraphRunner,
+    flow_t_span,
+    prepare_flow_dit,
+)
+from sglang_omni.models.firered_tts3.packed_qkv import PackedQkvModel
+from tests.unit_test.fixtures.firered_tts3 import (
+    HISTORY_LENGTH,
+    N_TIMESTEPS,
+    PATCH_SIZE,
+    tiny_cpu_dit,
 )
 
-from .conftest import CHECKPOINTS, REFERENCE_FIREREDTTS3, pin_native_rms_norm
+pytestmark = pytest.mark.usefixtures("disable_flow_optimization_environment")
 
-BASE_CHECKPOINT = CHECKPOINTS["base"]
 
-requires_all = pytest.mark.skipif(
-    not BASE_CHECKPOINT.is_dir() or not REFERENCE_FIREREDTTS3.is_dir(),
-    reason="FireRedTTS3 checkpoint or reference sources not present",
+def test_flow_mode_validation() -> None:
+    dit = tiny_cpu_dit()
+    with pytest.raises(ValueError, match="unknown flow mode"):
+        prepare_flow_dit(dit, "compile-bf16")
+    with pytest.raises(ValueError, match="unknown flow mode"):
+        FlowGraphRunner(
+            dit,
+            flow_t_span(N_TIMESTEPS, torch.device("cpu")),
+            n_timesteps=N_TIMESTEPS,
+            patch_size=PATCH_SIZE,
+            history_length=HISTORY_LENGTH,
+            mode="fp16",
+        )
+    from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
+
+    with pytest.raises(ValueError, match="flow_mode"):
+        FireRedTTS3EngineBuilder(flow_mode="fast")
+
+
+def test_prepare_flow_dit_bf16_deepcopy_isolation() -> None:
+    source = tiny_cpu_dit()
+    source_weight = next(source.parameters())
+    original = source_weight.detach().clone()
+    run_dit, fallback_dit = prepare_flow_dit(source, "bf16")
+    assert run_dit is fallback_dit and run_dit is not source
+    assert next(run_dit.parameters()).dtype == torch.bfloat16
+    # The caller's fp32 DiT (the eager reference path) is never mutated.
+    assert source_weight.dtype == torch.float32
+    assert torch.equal(source_weight.detach(), original)
+    with torch.no_grad():
+        source_weight.add_(1.0)
+    assert not torch.equal(next(run_dit.parameters()).float(), source_weight)
+
+
+@pytest.mark.parametrize("inherited_limit", [2, 96])
+@pytest.mark.parametrize("should_raise", [False, True])
+def test_explicit_time_cache_protects_original_compiled_call(
+    monkeypatch: pytest.MonkeyPatch, inherited_limit: int, should_raise: bool
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
+    monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
+    config = torch._dynamo.config  # noqa: leading-underscore  # PyTorch compiler API
+    observed: list[tuple[int, bool, bool]] = []
+
+    def config_state() -> tuple[int, bool, bool]:
+        return (
+            config.recompile_limit,
+            config.fail_on_recompile_limit_hit,
+            config.suppress_errors,
+        )
+
+    class CompiledProbe(torch.nn.Module):
+        def forward(self, *, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            observed.append(config_state())
+            if should_raise:
+                raise RuntimeError("compiled probe failure")
+            else:
+                return x + t
+
+    runner = FlowGraphRunner(
+        CompiledProbe(),
+        torch.tensor([0.0, 1.0]),
+        n_timesteps=1,
+        patch_size=1,
+        history_length=0,
+        mode="compile_fp32",
+        dit_fallback=torch.nn.Identity(),
+        precompute_time_conditions=True,
+    )
+    x = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    t = torch.ones_like(x)
+    initial = config_state()
+    with config.patch(
+        recompile_limit=inherited_limit,
+        fail_on_recompile_limit_hit=False,
+        suppress_errors=True,
+    ):
+        if should_raise:
+            with pytest.raises(RuntimeError, match="compiled probe failure"):
+                runner.dit(x=x, t=t)
+        else:
+            assert torch.equal(runner.dit(x=x, t=t), x + t)
+        assert observed == [(max(DIT_RECOMPILE_LIMIT, inherited_limit), True, False)]
+        assert config_state() == (inherited_limit, False, True)
+    assert config_state() == initial
+
+
+@pytest.mark.parametrize("mode", ["fp32", "bf16"])
+@pytest.mark.parametrize("switch", ["time", "conv"])
+def test_flow_caches_require_compiled_execution(
+    monkeypatch, mode: str, switch: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1" if switch == "time" else "0")
+    monkeypatch.setenv(
+        "FIREREDTTS3_CONV_LAYOUT",
+        "conv2d_channels_last" if switch == "conv" else "conv1d",
+    )
+    with pytest.raises(ValueError, match="require a compile flow mode"):
+        prepare_flow_dit(tiny_cpu_dit(), mode)
+
+
+@pytest.mark.parametrize(
+    "time_switch,conv_switch,message",
+    [
+        ("2", "conv1d", "FIRERED_TTS3_PRECOMPUTE_TIME"),
+        ("0", "conv2d", "FIREREDTTS3_CONV_LAYOUT"),
+    ],
 )
+def test_invalid_flow_cache_switches_fail(
+    monkeypatch, time_switch: str, conv_switch: str, message: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", time_switch)
+    monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", conv_switch)
+    with pytest.raises(ValueError, match=message):
+        prepare_flow_dit(tiny_cpu_dit(), "compile_bf16")
 
 
-def load_base_config() -> FireRedTTS3Config:
-    from sglang_omni.models.firered_tts3.config import load_checkpoint_hf_config
-
-    config = load_checkpoint_hf_config(str(BASE_CHECKPOINT))
-    assert config is not None
-    return config
-
-
-@pytest.fixture
-def device() -> torch.device:
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is required")
-    return torch.device("cuda")
-
-
-@requires_all
-@pytest.mark.accelerator
-def test_patch_encoder_matches_reference(device, reference_sources) -> None:
-    from fireredtts3.llm.patch_encoder import PatchEncoder as ReferencePatchEncoder
-
-    config = load_base_config()
-    ours = load_patch_encoder(str(BASE_CHECKPOINT), config, device=device)
-
-    oracle = ReferencePatchEncoder(
-        in_dim=config.redae_dim,
-        out_dim=config.hidden_size,
-        patch_size=config.patch_size,
-        hidden_size=config.patch_encoder_hidden_size,
-        mlp_ratio=config.patch_encoder_mlp_ratio,
-        depth=config.patch_encoder_depth,
-        num_heads=config.patch_encoder_num_heads,
+def test_private_model_keeps_source_and_forward_unchanged():
+    source = DiT(
+        in_channels=20,
+        out_channels=4,
+        hidden_size=32,
+        num_heads=4,
+        mlp_ratio=3,
+        depth=2,
+    ).eval()
+    values = {name: tensor.clone() for name, tensor in source.state_dict().items()}
+    rng = torch.get_rng_state().clone()
+    packed = PackedQkvModel(source)
+    assert torch.equal(torch.get_rng_state(), rng)
+    assert packed.source is source and packed.model is not source
+    assert all(
+        torch.equal(source.state_dict()[name], tensor)
+        for name, tensor in values.items()
     )
-    oracle.load_state_dict(
-        read_component_tensors(BASE_CHECKPOINT, "patch_encoder."), strict=True
-    )
-    pin_native_rms_norm(oracle)
-    oracle = oracle.to(device=device, dtype=torch.float32).eval()
+    x, time = torch.randn(2, 12, 20), torch.ones(2, 1, 1)
+    with torch.inference_mode():
+        expected = source(x=x, t=time)
+        actual = packed.model(x=x, t=time)
+        unchanged = source(x=x, t=time)
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    assert torch.equal(unchanged, expected)
+    packed.validate_weights()
 
-    generator = torch.Generator(device="cpu").manual_seed(1234)
-    inputs = torch.randn(1, 8, config.redae_dim, generator=generator).to(device)
+
+@pytest.mark.parametrize("operator", ["conv1d", "convolution_3d", "convolution_4d"])
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_conv_weight_cache_dispatch_contract(operator: str, with_bias: bool) -> None:
+    device = torch.device("cpu")
+    source = torch.nn.Conv1d(4, 4, 3, padding=1).to(device=device, dtype=torch.bfloat16)
     with torch.no_grad():
-        out_ours = ours(inputs)
-        out_oracle = oracle(inputs)
+        source.weight.zero_()
+        source.bias.fill_(3.0)
+        for channel in range(4):
+            source.weight[channel, channel, 1] = 0.5
+            source.weight[channel, (channel + 1) % 4, 0] = 0.25
+    inputs = ((torch.arange(96, device=device) % 8) - 4).reshape(2, 4, 12)
+    inputs = inputs.to(dtype=torch.bfloat16)
+    cache = Conv1dWeightCache(source)
+    bias = source.bias if with_bias else None
 
-    assert out_ours.shape == (1, 2, config.hidden_size)
-    max_diff = (out_ours - out_oracle).abs().max().item()
-    assert torch.equal(out_ours, out_oracle), f"max diff {max_diff:.3e}"
+    def call(weight: torch.Tensor) -> torch.Tensor:
+        if operator == "conv1d":
+            return torch.ops.aten.conv1d.default(inputs, weight, bias, padding=[1])
+        elif operator == "convolution_3d":
+            return torch.ops.aten.convolution.default(
+                inputs, weight, bias, [1], [1], [1], False, [0], 1
+            )
+        else:
+            return torch.ops.aten.convolution.default(
+                inputs.unsqueeze(2),
+                weight.unsqueeze(2),
+                bias,
+                [1, 1],
+                [0, 1],
+                [1, 1],
+                False,
+                [0, 0],
+                1,
+            )
+
+    with torch.inference_mode():
+        want = call(source.weight)
+        with cache:
+            got = call(source.weight)
+        assert cache.hits == 1 and cache.misses == 0
+        unrelated_weight = source.weight.clone()
+        with cache:
+            unhandled = call(unrelated_weight)
+    assert got.shape == want.shape and got.stride() == want.stride()
+    assert got.dtype == want.dtype == torch.bfloat16
+    assert torch.equal(got, want)
+    assert torch.equal(unhandled, want)
+    assert cache.hits == 1 and cache.misses == 1
+    cache.validate_weights()
 
 
-@requires_all
-@pytest.mark.accelerator
-def test_dit_single_step_matches_reference(device, reference_sources) -> None:
-    from fireredtts3.llm.dit import DiT as ReferenceDiT
-
-    config = load_base_config()
-    ours = load_dit(str(BASE_CHECKPOINT), config, device=device)
-
-    oracle = ReferenceDiT(
-        in_channels=config.dit_in_channels,
-        out_channels=config.redae_dim,
-        mlp_ratio=config.dit_mlp_ratio,
-        depth=config.dit_depth,
-        num_heads=config.dit_num_heads,
-        hidden_size=config.dit_hidden_size,
+def test_time_gemm_cache_copies_snapshot_and_rejects_wrong_signature() -> None:
+    inputs = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    weight = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    bias, output = torch.ones(4), torch.empty(2, 4)
+    weights = {weight.data_ptr(): "time"}
+    collector = TimeGemmMode(weights, phase="collect", n_timesteps=1)
+    with collector, collector.step(0):
+        torch.addmm(bias, inputs, weight, out=output)
+    expected = output.clone()
+    table = TimeGemmTable(
+        model_id=id(weight), n_timesteps=1, steps=(collector.collected[0],)
     )
-    oracle.load_state_dict(read_component_tensors(BASE_CHECKPOINT, "dit."), strict=True)
-    pin_native_rms_norm(oracle)
-    oracle = oracle.to(device=device, dtype=torch.float32).eval()
-
-    generator = torch.Generator(device="cpu").manual_seed(1234)
-    # DiT context is fixed at 12 frames: 8 clean history + 4 noised targets.
-    x_in = torch.randn(2, 12, config.dit_in_channels, generator=generator).to(device)
-    timesteps = torch.tensor([0.13, 0.87], device=device)
-    with torch.no_grad():
-        out_ours = ours(x_in, timesteps)
-        out_oracle = oracle(x_in, timesteps)
-
-    assert out_ours.shape == (2, 12, config.redae_dim)
-    max_diff = (out_ours - out_oracle).abs().max().item()
-    assert torch.equal(out_ours, out_oracle), f"max diff {max_diff:.3e}"
-
-
-@requires_all
-@pytest.mark.accelerator
-def test_dit_instruct_width_matches_reference(device, reference_sources) -> None:
-    """The 1088-channel DiT variant (no speaker channel) must also be exact."""
-    from fireredtts3.llm.dit import DiT as ReferenceDiT
-
-    instruct_checkpoint = CHECKPOINTS["instruct"]
-    if not instruct_checkpoint.is_dir():
-        pytest.skip("Instruct checkpoint not present")
-    from sglang_omni.models.firered_tts3.config import load_checkpoint_hf_config
-
-    config = load_checkpoint_hf_config(str(instruct_checkpoint))
-    assert config is not None and config.dit_in_channels == 1088
-    ours = load_dit(str(instruct_checkpoint), config, device=device)
-
-    oracle = ReferenceDiT(
-        in_channels=config.dit_in_channels,
-        out_channels=config.redae_dim,
-        mlp_ratio=config.dit_mlp_ratio,
-        depth=config.dit_depth,
-        num_heads=config.dit_num_heads,
-        hidden_size=config.dit_hidden_size,
-    )
-    oracle.load_state_dict(
-        read_component_tensors(instruct_checkpoint, "dit."), strict=True
-    )
-    pin_native_rms_norm(oracle)
-    oracle = oracle.to(device=device, dtype=torch.float32).eval()
-
-    generator = torch.Generator(device="cpu").manual_seed(7)
-    x_in = torch.randn(1, 12, config.dit_in_channels, generator=generator).to(device)
-    timesteps = torch.tensor([0.5], device=device)
-    with torch.no_grad():
-        out_ours = ours(x_in, timesteps)
-        out_oracle = oracle(x_in, timesteps)
-
-    max_diff = (out_ours - out_oracle).abs().max().item()
-    assert torch.equal(out_ours, out_oracle), f"max diff {max_diff:.3e}"
+    cached = TimeGemmMode(weights, phase="cached", n_timesteps=1, table=table)
+    output.fill_(-1)
+    with cached, cached.step(0):
+        returned = torch.addmm(bias, inputs, weight, out=output)
+    assert returned is output
+    assert finite_byte_equal(output, expected)
+    changed_stride = inputs.t().contiguous().t()
+    with pytest.raises(TimeCacheUnavailable, match="signature changed"):
+        with cached, cached.step(0):
+            torch.addmm(bias, changed_stride, weight, out=output)

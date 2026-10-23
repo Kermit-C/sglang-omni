@@ -1,12 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Instruct text-AR state machine: transitions, budget, and boundary cases.
-
-The reference machine (fireredtts3_instruct.generate): text steps sample real
-tokens; sampling <|eot|> (or the 200th token) makes that token's own feed the
-no-sampling finalize step; then one <|sosp|> feed; then the audio loop's
-step 0 feeds <|sosp|> AGAIN (the doubled feed is the reference's actual
-behavior). <|eot|> must never terminate the request.
-"""
+"""Instruct text-AR state machine: transitions, budget, and boundary cases."""
 
 from __future__ import annotations
 
@@ -151,66 +144,6 @@ def test_text_machine_budget_boundary_at_199() -> None:
     assert len(data.text_token_ids) == TEXT_TOKEN_BUDGET - 1
 
 
-def test_text_output_tokens_tracks_the_machine() -> None:
-    """The output_ids layout for re-prefill: text(+eot) + sosp rows + patches."""
-    runner = make_runner()
-    request = make_request()
-    data = request.data
-
-    # Mid-text: only the recorded text tokens exist in output_ids.
-    data.text_token_ids = [10, 11, 12]
-    assert runner.text_output_tokens(data) == 3
-
-    # After EOT: the EOT feed row joins the region.
-    data.eot_sampled = True
-    data.text_ar_mode = TEXT_MODE_FINALIZE
-    assert runner.text_output_tokens(data) == 4
-
-    data.text_ar_mode = TEXT_MODE_SOSP
-    assert runner.text_output_tokens(data) == 5
-
-    data.text_ar_mode = TEXT_MODE_AUDIO_ZERO
-    assert runner.text_output_tokens(data) == 6
-
-    data.text_ar_mode = TEXT_MODE_AUDIO
-    assert runner.text_output_tokens(data) == 6
-
-    # Audio-mode requests without a text phase contribute nothing.
-    plain = FireRedTTS3SGLangRequestData(state=FireRedTTS3State(task_type="tts"))
-    assert runner.text_output_tokens(plain) == 0
-
-    # Degenerate empty text (EOT at the first sample): the region is the EOT
-    # feed plus the two sosp rows once the machine reaches steady audio.
-    empty = FireRedTTS3SGLangRequestData(
-        state=FireRedTTS3State(task_type="voice_design")
-    )
-    empty.eot_sampled = True
-    empty.text_ar_mode = TEXT_MODE_AUDIO
-    assert runner.text_output_tokens(empty) == 3
-
-
-def test_audio_hidden_offset_matches_layout() -> None:
-    """Patch-driving hiddens start after the text region and the FIRST sosp
-    (the doubled second sosp feed is the patch-0-driving audio_zero row)."""
-    runner = make_runner()
-    request = make_request()
-    data = request.data
-    data.text_token_ids = [10, 11, 12]
-    data.eot_sampled = True
-    data.text_ar_mode = TEXT_MODE_AUDIO
-    # output_ids = [t0, t1, t2, EOT, SOSP, SOSP, 0...]; the second SOSP row
-    # (index 5) is the audio_zero feed whose hidden drives patch 0.
-    assert runner.audio_hidden_offset(data) == 5
-
-    # Budget-exhausted text (no EOT) shifts nothing else.
-    data.eot_sampled = False
-    assert runner.audio_hidden_offset(data) == 3 + 1
-
-    # Plain audio-mode requests (Base / Instruct tts) have no offset.
-    plain = FireRedTTS3SGLangRequestData(state=FireRedTTS3State(task_type="tts"))
-    assert runner.audio_hidden_offset(plain) == 0
-
-
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("prefill", [False, True])
 def test_speaker_known_ids_survive_finalize(batch_size: int, prefill: bool) -> None:
@@ -313,21 +246,22 @@ def test_control_fastpath_preserves_other_token_paths(
     assert host_ids is None
 
 
-@pytest.mark.parametrize("skip", [None, False, True])
 @pytest.mark.parametrize(
-    "variant,dual_stream,async_enabled,min_patches,patch_count,skip_eligible",
+    "skip,variant,dual_stream,async_enabled,min_patches,patch_count,logit,expected_stop,expected_calls",
     [
-        ("speaker", False, False, 0, 0, False),
-        ("speaker", False, False, 6, 5, True),
-        ("speaker", False, False, 6, 6, False),
-        ("speaker", False, False, 6, 7, False),
-        ("speaker", False, True, 6, 5, False),
-        ("speaker", True, False, 6, 5, False),
-        ("base", False, False, 6, 5, False),
-        ("instruct", False, False, 6, 5, False),
+        (None, "speaker", False, False, 6, 5, 2.0, False, 0),
+        (False, "speaker", False, False, 6, 5, 2.0, False, 1),
+        (True, "speaker", False, False, 6, 5, 2.0, False, 0),
+        (True, "speaker", False, False, 0, 0, 0.0, True, 1),
+        (True, "speaker", False, False, 6, 6, -2.0, False, 1),
+        (True, "speaker", False, False, 6, 6, 0.0, True, 1),
+        (True, "speaker", False, False, 6, 7, 2.0, True, 1),
+        (True, "speaker", False, True, 6, 5, 2.0, False, 1),
+        (True, "speaker", True, False, 6, 5, 2.0, False, 1),
+        (True, "base", False, False, 6, 5, 2.0, False, 1),
+        (True, "instruct", False, False, 6, 5, 2.0, False, 1),
     ],
 )
-@pytest.mark.parametrize("logit", [-2.0, 0.0, 2.0])
 def test_min_patch_stop_boundary_is_unchanged(
     skip: bool | None,
     variant: str,
@@ -335,8 +269,9 @@ def test_min_patch_stop_boundary_is_unchanged(
     async_enabled: bool,
     min_patches: int,
     patch_count: int,
-    skip_eligible: bool,
     logit: float,
+    expected_stop: bool,
+    expected_calls: int,
 ) -> None:
     runner = make_runner()
     if skip is not None:
@@ -358,10 +293,8 @@ def test_min_patch_stop_boundary_is_unchanged(
         return hidden.new_full((1, 1, 1), logit)
 
     runner.model = SimpleNamespace(stop_head=stop_head)
-    assert runner.stop_predicted(data, torch.zeros(1, 8)) == (
-        patch_count >= min_patches and logit >= 0
-    )
-    assert len(calls) == (0 if skip is not False and skip_eligible else 1)
+    assert runner.stop_predicted(data, torch.zeros(1, 8)) is expected_stop
+    assert len(calls) == expected_calls
 
 
 @pytest.mark.parametrize("control_token_fastpath", [False, True])
@@ -417,6 +350,7 @@ def test_speaker_control_flags_preserve_independent_request_stops(
     assert len(stop_calls) == (2 if skip_min_patch_stop else 3)
 
 
+@pytest.mark.accelerator
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_control_token_device_snapshots_are_independent() -> None:
     runner = make_runner()

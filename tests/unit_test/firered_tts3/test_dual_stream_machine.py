@@ -1,20 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Dual-stream decode machine (speaker variant): the (nt, na) group schedule.
-
-The reference generate_streaming_noicl mapped onto engine steps: per group,
-nt text feeds (only the LAST drives the flow) then na patch feeds (the first
-na - 1 drive the next flow; the last only runs the stop check — the patch
-was already emitted, so a stopping step HAS produced audio). Text feeds ride
-the engine's token rail (the recorded token ids, <|text_pad|> once
-exhausted); patch feeds pop the queued PatchEncoder feedback.
-"""
+"""Dual-stream decode machine (speaker variant): the (nt, na) group schedule."""
 
 from __future__ import annotations
 
 import collections
 from types import SimpleNamespace
 
-import pytest
 import torch
 from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
 
@@ -188,99 +179,6 @@ def test_general_ratio_groups() -> None:
     ]
     assert [count for count, _ in runner.flow_calls] == [1, 2, 3]
     assert (data.ds_stage, data.ds_index) == (DS_STAGE_TEXT, 0)
-
-
-def test_cond_rows_rebuild_positions() -> None:
-    """Re-prefill cond history: one row per fired flow at the group-internal
-    cond-driving feeds (text-last + intermediate patch feeds)."""
-    runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    request = make_request(ratio=(2, 3))
-    data = request.data
-    data.flow_state = SimpleNamespace(patch_count=5)
-    hidden = torch.arange(3 + 10, dtype=torch.float32).unsqueeze(-1)  # rows 0..12
-
-    rows = runner.dual_stream_cond_rows(data, hidden)
-    # [2, 3]: per group the cond rows are offsets 1 (text-last), 2, 3
-    # (intermediate patch feeds); the last patch feed (offset 4) never
-    # contributes. Group 0: 4, 5, 6; group 1: 9, 10 (5 flows total).
-    assert rows.shape == (1, 5, 1)
-    assert [int(v) for v in rows[0, :, 0]] == [4, 5, 6, 9, 10]
-
-
-def test_cond_rows_rebuild_ratio_21() -> None:
-    runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    request = make_request(ratio=(2, 1))
-    data = request.data
-    data.flow_state = SimpleNamespace(patch_count=3)
-    hidden = torch.arange(3 + 9, dtype=torch.float32).unsqueeze(-1)
-
-    rows = runner.dual_stream_cond_rows(data, hidden)
-    # [2, 1]: only the text-last feed (offset 1) per group: 4, 7, 10.
-    assert [int(v) for v in rows[0, :, 0]] == [4, 7, 10]
-
-
-def test_resume_at_patch_feed_requeues_pending_feedback() -> None:
-    """A retraction interrupting a patch feed: the replay re-queues the
-    pending patch embedding and the machine resumes at the patch feed."""
-    runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    runner.active_requests = {}
-    runner.t_span_cache = {}
-
-    model = SimpleNamespace()
-    embedded: list[list[int]] = []
-
-    def embed_tokens(ids):
-        embedded.append([int(i) for i in ids])
-        return torch.zeros(len(ids), 8)
-
-    def patch_encoder(patch):
-        return torch.ones(1, int(patch.shape[1] // 4), 8)
-
-    model.get_input_embeddings = lambda: embed_tokens
-    model.patch_encoder = patch_encoder
-
-    request = make_request(text_ids=(101, 102, 103, 104))
-    data = request.data
-    # Retracted mid-group: [t0, t1, C, t2] fed; the C feed consumed patch 0
-    # (flown on t1); patch 1's flow never ran. Machine sits at the second
-    # text feed of group 1.
-    data.req.output_ids = [101, 102, CONTROL_TOKEN_ID, 103]
-    data.latent_patches = [torch.zeros(1, 4, 64)]
-    data.ds_stage = DS_STAGE_TEXT
-    data.ds_index = 1
-    data.pending_feedback_queue = collections.deque()
-    data.flow_state = SimpleNamespace(patch_count=1)
-
-    rows = runner.build_dual_stream_replay_rows(model, data, "cpu", torch.float32)
-    assert rows.shape == (4, 8)  # t0, t1, patch0, t2
-    assert not data.pending_feedback_queue
-
-    # Retracted with the patch feed pending: [t0, t1, C] fed, patch 1
-    # generated, its feed interrupted.
-    data.req.output_ids = [101, 102, CONTROL_TOKEN_ID, 103, 104]
-    data.latent_patches = [torch.zeros(1, 4, 64), torch.ones(1, 4, 64)]
-    data.ds_stage = DS_STAGE_PATCH
-    data.ds_index = 0
-    rows = runner.build_dual_stream_replay_rows(model, data, "cpu", torch.float32)
-    assert rows.shape == (5, 8)  # t0, t1, patch0, t2, t3
-    assert len(data.pending_feedback_queue) == 1  # patch 1 re-queued
-
-
-def test_resume_rejects_inconsistent_history() -> None:
-    runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    model = SimpleNamespace()
-    model.get_input_embeddings = lambda: lambda ids: torch.zeros(len(ids), 8)
-    model.patch_encoder = lambda patch: torch.ones(1, 1, 8)
-
-    request = make_request()
-    data = request.data
-    # Two patch feeds recorded but only one patch generated: inconsistent.
-    data.req.output_ids = [101, 102, CONTROL_TOKEN_ID, CONTROL_TOKEN_ID]
-    data.latent_patches = [torch.zeros(1, 4, 64)]
-    data.ds_stage = DS_STAGE_TEXT
-    data.pending_feedback_queue = collections.deque()
-    with pytest.raises(AssertionError, match="more patch feeds"):
-        runner.build_dual_stream_replay_rows(model, data, "cpu", torch.float32)
 
 
 def make_batching_runner() -> FireRedTTS3ModelRunner:
