@@ -11,10 +11,10 @@ from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
 
 
 def test_base_text_template_matches_reference() -> None:
-    """The Base ICL template from the reference FireRedTTS3Base.generate."""
+    """Reference text precedes target text inside the checkpoint text delimiters."""
     language, ref_text, text = "zh", "参考文本。", "要合成的文本。"
-    ours = prompt_utils.compose_base_text(language, ref_text, text)
-    assert ours == "<|zh|><|sot|>参考文本。要合成的文本。<|eot|>"
+    actual = prompt_utils.compose_base_text(language, ref_text, text)
+    assert actual == "<|zh|><|sot|>参考文本。要合成的文本。<|eot|>"
 
 
 def test_speaker_chatml_rejects_bad_ratio() -> None:

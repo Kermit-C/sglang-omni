@@ -1,174 +1,123 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Instruct text-AR state machine: transitions, budget, and boundary cases."""
+"""Text sampling, audio transitions, and request stop ownership on real CPU flow."""
 
 from __future__ import annotations
 
-from contextlib import nullcontext
-from types import SimpleNamespace
+from typing import Literal
+from unittest.mock import patch
 
 import pytest
 import torch
+from sglang.srt.managers.utils import GenerationBatchResult
 
 from sglang_omni.models.firered_tts3.model_runner import (
     TEXT_MODE_AUDIO,
-    TEXT_MODE_AUDIO_ZERO,
     TEXT_MODE_FINALIZE,
-    TEXT_MODE_SOSP,
     TEXT_MODE_TEXT,
     FireRedTTS3ModelRunner,
-    FlowRow,
 )
-from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
-from sglang_omni.models.firered_tts3.prompt_utils import (
-    AUDIO_SOS_ID,
-    TEXT_EOT_ID,
-    TEXT_TOKEN_BUDGET,
-)
-from sglang_omni.models.firered_tts3.request_builders import (
-    CONTROL_TOKEN_ID,
-    FireRedTTS3SGLangRequestData,
-)
+from sglang_omni.models.firered_tts3.prompt_utils import AUDIO_SOS_ID, TEXT_EOT_ID
+from sglang_omni.models.firered_tts3.request_builders import CONTROL_TOKEN_ID
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
+from sglang_omni.scheduling.types import SchedulerOutput, SchedulerRequest
+from tests.unit_test.fixtures.firered_tts3 import (
+    SmallFlowModel,
+    make_flow_request,
+    make_flow_result,
+    make_flow_runner,
+)
 
 
 def make_runner() -> FireRedTTS3ModelRunner:
-    runner = FireRedTTS3ModelRunner.__new__(FireRedTTS3ModelRunner)
-    runner.async_enabled = False
-    runner.active_requests = {}
-    runner.t_span_cache = {}
-    runner.flow_calls = 0
-    runner.flow_step = lambda data, hidden, flow_rows=None, defer_stop=False: setattr(  # type: ignore[attr-defined]
-        runner, "flow_calls", runner.flow_calls + 1
-    )
+    runner = make_flow_runner(SmallFlowModel())
+    runner.output_processor = SGLangOutputProcessor()
     return runner
 
 
-def make_request(task_type: str = "voice_design") -> SimpleNamespace:
-    data = FireRedTTS3SGLangRequestData(state=FireRedTTS3State(task_type=task_type))
-    data.text_ar_mode = TEXT_MODE_TEXT
-    return SimpleNamespace(request_id="rid", data=data)
+def make_request(
+    task_type: Literal["voice_design", "tts"] = "voice_design"
+) -> SchedulerRequest:
+    request = make_flow_request()
+    request.data.state.variant = "instruct"
+    request.data.state.task_type = task_type
+    request.data.text_ar_mode = TEXT_MODE_TEXT
+    request.data.req.set_extend_range(0, 1)
+    return request
 
 
-def make_result(next_ids: list[int]) -> SimpleNamespace:
-    batch = len(next_ids)
-    return SimpleNamespace(
-        next_token_ids=torch.tensor(next_ids, dtype=torch.long),
-        logits_output=SimpleNamespace(hidden_states=torch.zeros(batch, 8)),
-    )
+def make_result(next_ids: list[int]) -> GenerationBatchResult:
+    return make_flow_result(torch.zeros(len(next_ids), 8), next_ids)
 
 
-def decode_step(runner, request, sampled: int) -> int:
+def decode_step(
+    runner: FireRedTTS3ModelRunner, request: SchedulerRequest, sampled: int
+) -> int:
     result = make_result([sampled])
     runner.post_decode(result, None, None, [request])
     return int(result.next_token_ids[0])
 
 
-def test_text_machine_immediate_eot() -> None:
-    """Empty text: the very first sampled token is EOT (degenerate plan)."""
-    runner = make_runner()
-    request = make_request()
-    data = request.data
-
-    # The prefill tail samples EOT right away.
-    token = runner.record_text_sample(data, torch.tensor(TEXT_EOT_ID))
-    assert token == TEXT_EOT_ID
-    assert data.text_ar_mode == TEXT_MODE_FINALIZE
-    assert data.text_token_ids == []  # EOT is never recorded
-    assert data.eot_sampled is True
-
-    # Finalize step: feeds embed(EOT), the runner steers to sosp (no sampling).
-    assert decode_step(runner, request, 0) == AUDIO_SOS_ID
-    assert data.text_ar_mode == TEXT_MODE_SOSP
-    # The sosp feed; the machine arms the doubled feed for audio step 0.
-    assert decode_step(runner, request, 0) == AUDIO_SOS_ID
-    assert data.text_ar_mode == TEXT_MODE_AUDIO_ZERO
-    assert runner.flow_calls == 0
-    # Audio step 0: the doubled sosp feed drives the first flow step.
-    assert decode_step(runner, request, 0) == CONTROL_TOKEN_ID
-    assert data.text_ar_mode == TEXT_MODE_AUDIO
-    assert runner.flow_calls == 1
-    # Steady state.
-    assert decode_step(runner, request, 0) == CONTROL_TOKEN_ID
-    assert runner.flow_calls == 2
-
-
-def test_text_machine_single_token() -> None:
-    runner = make_runner()
-    request = make_request()
-    data = request.data
-
-    token = runner.record_text_sample(data, torch.tensor(100))
-    assert token == 100
-    assert data.text_ar_mode == TEXT_MODE_TEXT
-    assert data.text_token_ids == [100]
-    assert data.text_fed == 1
-
-    token = runner.record_text_sample(data, torch.tensor(TEXT_EOT_ID))
-    assert data.text_ar_mode == TEXT_MODE_FINALIZE
-    assert data.text_token_ids == [100]
-    assert data.text_fed == 2
-
-
-def test_text_machine_full_budget() -> None:
-    """200 samples without EOT: the 200th token's feed becomes the finalize."""
-    runner = make_runner()
-    request = make_request()
-    data = request.data
-
-    for index in range(TEXT_TOKEN_BUDGET):
-        assert data.text_ar_mode == TEXT_MODE_TEXT
-        runner.record_text_sample(data, torch.tensor(1000 + index))
-    assert data.text_ar_mode == TEXT_MODE_FINALIZE
-    assert len(data.text_token_ids) == TEXT_TOKEN_BUDGET
-    assert data.eot_sampled is False
-
-    # The transition sequence still runs: finalize -> sosp -> audio_zero.
-    assert decode_step(runner, request, 0) == AUDIO_SOS_ID
-    assert decode_step(runner, request, 0) == AUDIO_SOS_ID
-    assert data.text_ar_mode == TEXT_MODE_AUDIO_ZERO
-    decode_step(runner, request, 0)
-    assert data.text_ar_mode == TEXT_MODE_AUDIO
-
-
-def test_text_machine_budget_boundary_at_199() -> None:
-    """EOT arriving as the 199th sample takes the EOT branch (not the budget)."""
-    runner = make_runner()
-    request = make_request()
-    data = request.data
-    for index in range(TEXT_TOKEN_BUDGET - 1):
-        runner.record_text_sample(data, torch.tensor(1000 + index))
-    assert data.text_ar_mode == TEXT_MODE_TEXT
-    runner.record_text_sample(data, torch.tensor(TEXT_EOT_ID))
-    assert data.text_ar_mode == TEXT_MODE_FINALIZE
-    assert data.eot_sampled is True
-    assert len(data.text_token_ids) == TEXT_TOKEN_BUDGET - 1
+@pytest.mark.parametrize(
+    "text_count,has_eot", [(0, True), (1, True), (199, True), (200, False)]
+)
+def test_text_transition_preserves_tokens_and_double_audio_start(
+    text_count: int, has_eot: bool
+) -> None:
+    """Empty, short, boundary-EOT, and exhausted plans must enter audio through two start feeds."""
+    runner, request = make_runner(), make_request()
+    request_data = request.data
+    for index in range(text_count):
+        assert request_data.text_ar_mode == TEXT_MODE_TEXT
+        assert (
+            runner.record_text_sample(request_data, torch.tensor(1000 + index))
+            == 1000 + index
+        )
+        assert request_data.text_fed == index + 1
+    if has_eot:
+        assert (
+            runner.record_text_sample(request_data, torch.tensor(TEXT_EOT_ID))
+            == TEXT_EOT_ID
+        )
+    else:
+        pass
+    assert request_data.text_ar_mode == TEXT_MODE_FINALIZE
+    assert request_data.text_token_ids == list(range(1000, 1000 + text_count))
+    assert request_data.text_fed == text_count + int(has_eot)
+    assert request_data.eot_sampled is has_eot
+    tokens, patch_counts = [], []
+    for _ in range(4):
+        tokens.append(decode_step(runner, request, 0))
+        patch_counts.append(len(request_data.latent_patches))
+    assert tokens == [AUDIO_SOS_ID, AUDIO_SOS_ID, CONTROL_TOKEN_ID, CONTROL_TOKEN_ID]
+    assert patch_counts == [0, 0, 1, 2]
+    assert request_data.text_ar_mode == TEXT_MODE_AUDIO
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("prefill", [False, True])
 def test_speaker_known_ids_survive_finalize(batch_size: int, prefill: bool) -> None:
     runner = make_runner()
-    runner.output_processor = SGLangOutputProcessor()
     requests = []
     for index in range(batch_size):
         request = make_request("tts")
         request.request_id = f"speaker-{index}"
         request.data.state.variant = "speaker"
         request.data.text_ar_mode = TEXT_MODE_AUDIO
-        request.data.flow_state = SimpleNamespace(patch_count=0)
-        request.data.req = SimpleNamespace(extend_range=SimpleNamespace(length=1))
         requests.append(request)
     result = make_result([123] * batch_size)
     result.can_run_cuda_graph = False
     if prefill:
-        runner.post_prefill(
-            result, None, SimpleNamespace(is_prefill_only=False), requests
-        )
+        runner.post_prefill(result, None, None, requests)
     else:
         runner.post_decode(result, None, None, requests)
     assert result.next_token_ids.tolist() == [CONTROL_TOKEN_ID] * batch_size
     result.next_token_ids.fill_(123)
-    output = runner.finalize(result, None, None, SimpleNamespace(requests=requests))
+    output = runner.finalize(
+        result,
+        None,
+        None,
+        SchedulerOutput(requests=requests, batch_data=None, step_id=0),
+    )
     assert output.host_token_ids.device.type == "cpu"
     assert output.host_token_ids.tolist() == [CONTROL_TOKEN_ID] * batch_size
     assert [output.outputs[r.request_id].data for r in requests] == [
@@ -177,39 +126,62 @@ def test_speaker_known_ids_survive_finalize(batch_size: int, prefill: bool) -> N
     assert all(r.data.generation_steps == 1 for r in requests)
 
 
-@pytest.mark.parametrize("speaker_first", [False, True])
-@pytest.mark.parametrize("sampled", [CONTROL_TOKEN_ID, 123, TEXT_EOT_ID])
 @pytest.mark.parametrize("prefill", [False, True])
-def test_mixed_speaker_and_text_batch_preserves_sampled_output(
-    speaker_first: bool, sampled: int, prefill: bool
-) -> None:
+def test_mixed_speaker_and_text_batch_preserves_sampled_output(prefill: bool) -> None:
     runner = make_runner()
-    runner.output_processor = SGLangOutputProcessor()
-    speaker, text = make_request("tts"), make_request()
-    speaker.request_id, text.request_id = "speaker", "text"
-    speaker.data.state.variant = "speaker"
-    speaker.data.text_ar_mode = TEXT_MODE_AUDIO
-    speaker.data.flow_state = SimpleNamespace(patch_count=0)
-    text.data.state.variant = "instruct"
-    requests = [speaker, text] if speaker_first else [text, speaker]
-    for request in requests:
-        request.data.req = SimpleNamespace(extend_range=SimpleNamespace(length=1))
-    result = make_result([sampled, sampled])
-    result.can_run_cuda_graph = False
-    if prefill:
-        runner.post_prefill(
-            result, None, SimpleNamespace(is_prefill_only=False), requests
+    for reverse_order in (False, True):
+        requests = [
+            make_request("tts"),
+            make_request(),
+            make_request(),
+            make_request("tts"),
+            make_request(),
+        ]
+        sampled_ids = [123, 123, TEXT_EOT_ID, 123, CONTROL_TOKEN_ID]
+        for index, request in enumerate(requests):
+            request.request_id = str(index)
+            if index in (0, 3):
+                request.data.state.variant = "speaker"
+                request.data.text_ar_mode = TEXT_MODE_AUDIO
+            else:
+                pass
+        if reverse_order:
+            requests.reverse()
+            sampled_ids.reverse()
+        else:
+            pass
+        result = make_result(sampled_ids)
+        if prefill:
+            runner.post_prefill(result, None, None, requests)
+        else:
+            runner.post_decode(result, None, None, requests)
+        output = runner.finalize(
+            result,
+            None,
+            None,
+            SchedulerOutput(requests=requests, batch_data=None, step_id=0),
         )
-    else:
-        runner.post_decode(result, None, None, requests)
-    output = runner.finalize(result, None, None, SimpleNamespace(requests=requests))
-    assert output.outputs["speaker"].data == CONTROL_TOKEN_ID
-    assert output.outputs["text"].data == sampled
-    assert output.host_token_ids is None
-    assert text.data.text_token_ids == ([] if sampled == TEXT_EOT_ID else [sampled])
-    assert text.data.eot_sampled is (sampled == TEXT_EOT_ID)
-    assert runner.flow_calls == 1
-    assert all(request.data.generation_steps == 1 for request in requests)
+        assert [output.outputs[str(index)].data for index in range(5)] == [
+            CONTROL_TOKEN_ID,
+            123,
+            TEXT_EOT_ID,
+            CONTROL_TOKEN_ID,
+            CONTROL_TOKEN_ID,
+        ]
+        by_id = {request.request_id: request.data for request in requests}
+        assert by_id["1"].text_token_ids == [123]
+        assert by_id["2"].text_token_ids == [] and by_id["2"].eot_sampled
+        assert by_id["4"].text_token_ids == [CONTROL_TOKEN_ID]
+        assert not by_id["1"].eot_sampled and not by_id["4"].eot_sampled
+        assert output.host_token_ids is None
+        assert [len(by_id[str(index)].latent_patches) for index in range(5)] == [
+            1,
+            0,
+            0,
+            1,
+            0,
+        ]
+        assert all(request.data.generation_steps == 1 for request in requests)
 
 
 @pytest.mark.parametrize(
@@ -276,6 +248,8 @@ def test_min_patch_stop_boundary_is_unchanged(
     runner = make_runner()
     if skip is not None:
         runner.skip_min_patch_stop = skip
+    else:
+        pass
     runner.async_enabled = async_enabled
     request = make_request("tts")
     data = request.data
@@ -284,17 +258,15 @@ def test_min_patch_stop_boundary_is_unchanged(
     data.state.min_patches = min_patches
     data.state.stop_threshold = 0.5
     data.text_ar_mode = TEXT_MODE_AUDIO
-    data.flow_state = SimpleNamespace(patch_count=patch_count)
-    data.probe = SimpleNamespace(segment=lambda name: nullcontext())
-    calls = []
-
-    def stop_head(hidden: torch.Tensor) -> torch.Tensor:
-        calls.append(hidden)
-        return hidden.new_full((1, 1, 1), logit)
-
-    runner.model = SimpleNamespace(stop_head=stop_head)
-    assert runner.stop_predicted(data, torch.zeros(1, 8)) is expected_stop
-    assert len(calls) == expected_calls
+    data.flow_state.patch_count = patch_count
+    with torch.no_grad():
+        runner.model.stop_head.weight.zero_()
+        runner.model.stop_head.bias.fill_(logit)
+    with patch.object(
+        runner.model.stop_head, "forward", wraps=runner.model.stop_head.forward
+    ) as forward:
+        assert runner.stop_predicted(data, torch.zeros(1, 8)) is expected_stop
+    assert forward.call_count == expected_calls
 
 
 @pytest.mark.parametrize("control_token_fastpath", [False, True])
@@ -303,51 +275,43 @@ def test_speaker_control_flags_preserve_independent_request_stops(
     control_token_fastpath: bool, skip_min_patch_stop: bool
 ) -> None:
     runner = make_runner()
-    del runner.flow_step
     runner.control_token_fastpath = control_token_fastpath
     runner.skip_min_patch_stop = skip_min_patch_stop
-    runner.output_processor = SGLangOutputProcessor()
     requests = [make_request("tts"), make_request("tts")]
     for index, request in enumerate(requests):
         request.request_id = f"speaker-{index}"
         request.data.state.variant = "speaker"
         request.data.state.min_patches = 6
+        request.data.state.stop_threshold = 0.5
         request.data.text_ar_mode = TEXT_MODE_AUDIO
-        request.data.flow_state = SimpleNamespace(patch_count=5 + index)
-        request.data.probe = SimpleNamespace(segment=lambda name: nullcontext())
-        request.data.req = SimpleNamespace(finished_reason=None)
-    stop_calls: list[torch.Tensor] = []
-    emitted: list[FireRedTTS3SGLangRequestData] = []
-
-    def stop_head(hidden: torch.Tensor) -> torch.Tensor:
-        stop_calls.append(hidden)
-        return hidden.new_full((1, 1, 1), 2.0)
-
-    def emit_patch(
-        data: FireRedTTS3SGLangRequestData,
-        hidden: torch.Tensor,
-        flow_rows: list[FlowRow] | None = None,
-    ) -> None:
-        data.flow_state.patch_count += 1
-        emitted.append(data)
-
-    runner.model = SimpleNamespace(stop_head=stop_head)
-    runner.run_flow = emit_patch
-    for active in (requests, requests[:1]):
-        result = make_result([123] * len(active))
-        result.can_run_cuda_graph = False
-        runner.post_decode(result, None, None, active)
-        output = runner.finalize(result, None, None, SimpleNamespace(requests=active))
-        assert [output.outputs[r.request_id].data for r in active] == [
-            CONTROL_TOKEN_ID
-        ] * len(active)
-        assert (output.host_token_ids is not None) is control_token_fastpath
-        assert requests[1].data.req.finished_reason is not None
-        assert (requests[0].data.req.finished_reason is not None) is (len(active) == 1)
-    assert emitted == [requests[0].data]
+        request.data.flow_state.patch_count = 5 + index
+    with torch.no_grad():
+        runner.model.stop_head.weight.zero_()
+        runner.model.stop_head.bias.fill_(2.0)
+    with patch.object(
+        runner.model.stop_head, "forward", wraps=runner.model.stop_head.forward
+    ) as forward:
+        for active in (requests, requests[:1]):
+            result = make_result([123] * len(active))
+            runner.post_decode(result, None, None, active)
+            output = runner.finalize(
+                result,
+                None,
+                None,
+                SchedulerOutput(requests=active, batch_data=None, step_id=0),
+            )
+            assert [output.outputs[request.request_id].data for request in active] == [
+                CONTROL_TOKEN_ID
+            ] * len(active)
+            assert (output.host_token_ids is not None) is control_token_fastpath
+            assert requests[1].data.req.finished_reason is not None
+            assert (requests[0].data.req.finished_reason is not None) is (
+                len(active) == 1
+            )
+    assert [len(request.data.latent_patches) for request in requests] == [1, 0]
     assert [request.data.flow_state.patch_count for request in requests] == [6, 6]
     assert [request.data.generation_steps for request in requests] == [2, 1]
-    assert len(stop_calls) == (2 if skip_min_patch_stop else 3)
+    assert forward.call_count == (2 if skip_min_patch_stop else 3)
 
 
 @pytest.mark.accelerator

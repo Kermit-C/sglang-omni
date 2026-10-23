@@ -6,9 +6,11 @@ from __future__ import annotations
 import collections
 import gc
 import weakref
+from unittest.mock import create_autospec
 
 import pytest
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
 
 import sglang_omni.models.firered_tts3.flow_graph as flow_graph_module
 from sglang_omni.models.firered_tts3.compiled_dit import (
@@ -73,24 +75,47 @@ def test_flow_tolerance_only_relaxes_convolution_gate(
     corrupted_calls = 0
     injected_delta = 0.25
 
-    def perturb_selected_flow(*args, **kwargs) -> torch.Tensor:
+    def perturb_selected_flow(
+        dit: torch.nn.Module | CompiledDiTExecutor,
+        xt: torch.Tensor,
+        cond: torch.Tensor,
+        t_span: torch.Tensor,
+        cfg: torch.Tensor,
+        n_timesteps: int,
+        patch_size: int,
+        *,
+        dit_dtype: torch.dtype = torch.float32,
+        executor: CompiledDiTExecutor | None = None,
+        dispatch_modes: tuple[TorchDispatchMode, ...] = (),
+        time_mode: TimeGemmMode | None = None,
+    ) -> torch.Tensor:
         nonlocal corrupted_calls
-        patch = original_loop(*args, **kwargs)
-        modes = kwargs.get("dispatch_modes", ())
+        patch = original_loop(
+            dit,
+            xt,
+            cond,
+            t_span,
+            cfg,
+            n_timesteps,
+            patch_size,
+            dit_dtype=dit_dtype,
+            executor=executor,
+            dispatch_modes=dispatch_modes,
+            time_mode=time_mode,
+        )
+        modes = dispatch_modes
         has_time = any(isinstance(mode, TimeGemmMode) for mode in modes)
         has_conv = any(isinstance(mode, Conv1dWeightCache) for mode in modes)
         should_corrupt = (
-            (
-                corrupted_stage == "observed"
-                and kwargs.get("executor") is not None
-                and not modes
-            )
+            (corrupted_stage == "observed" and executor is not None and not modes)
             or (corrupted_stage == "time" and has_time and not has_conv)
             or (corrupted_stage == "conv" and has_conv)
         )
         if should_corrupt:
             corrupted_calls += 1
             patch.add_(injected_delta)
+        else:
+            pass
         return patch
 
     monkeypatch.setattr(flow_graph_module, "euler_flow_loop", perturb_selected_flow)
@@ -113,6 +138,8 @@ def test_flow_tolerance_only_relaxes_convolution_gate(
         )
         if accepted:
             expected = expected + injected_delta
+        else:
+            pass
     assert calls_after_capture > 0 and corrupted_calls == calls_after_capture
     assert got is not None and torch.equal(got, expected)
     assert torch.equal(got, repeated)
@@ -135,25 +162,20 @@ def test_flow_tolerance_only_relaxes_convolution_gate(
     "time_cache,conv_cache", [(True, False), (False, True), (True, True)]
 )
 def test_optimized_flow_hits_dispatch_and_retains_time_table(
-    flow_dispatch_dit, device, monkeypatch, time_cache: bool, conv_cache: bool
+    flow_dispatch_dit: DiT,
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+    time_cache: bool,
+    conv_cache: bool,
 ) -> None:
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", str(int(time_cache)))
     monkeypatch.setenv(
         "FIREREDTTS3_CONV_LAYOUT", "conv2d_channels_last" if conv_cache else "conv1d"
     )
-    cached_time_hits = collections.Counter()
-    original_dispatch = TimeGemmMode.__torch_dispatch__
-
-    def count_cached_time_hits(self, func, types, args=(), kwargs=None) -> object:
-        if (
-            self.phase == "cached"
-            and func is torch.ops.aten.addmm.out
-            and args[2].data_ptr() in self.weights
-        ):
-            cached_time_hits[id(self)] += 1
-        return original_dispatch(self, func, types, args, kwargs)
-
-    monkeypatch.setattr(TimeGemmMode, "__torch_dispatch__", count_cached_time_hits)
+    dispatch = create_autospec(
+        TimeGemmMode.__torch_dispatch__, side_effect=TimeGemmMode.__torch_dispatch__
+    )
+    monkeypatch.setattr(TimeGemmMode, "__torch_dispatch__", dispatch)
     execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")
     assert isinstance(execution, CompiledDiTExecutor)
     runner = tiny_runner(
@@ -190,6 +212,14 @@ def test_optimized_flow_hits_dispatch_and_retains_time_table(
     assert sum(
         isinstance(mode, Conv1dWeightCache) for mode in entry.dispatch_modes
     ) == int(conv_cache)
+    cached_time_hits = collections.Counter(
+        id(call.args[0])
+        for call in dispatch.call_args_list
+        if call.args[0].phase == "cached"
+        and call.args[1] is torch.ops.aten.addmm.out
+        and call.args[3][2].data_ptr() in call.args[0].weights
+    )
+    dispatch.reset_mock()
     if time_cache:
         time_mode = next(
             mode for mode in entry.dispatch_modes if isinstance(mode, TimeGemmMode)
@@ -213,16 +243,17 @@ def test_optimized_flow_hits_dispatch_and_retains_time_table(
             ).hits
             > 0
         )
+    else:
+        pass
 
     def reject_time_weight_scan(self: TimeConditionCache) -> None:
         raise AssertionError("Time weights must not be scanned during replay")
 
     monkeypatch.setattr(TimeConditionCache, "validate_weights", reject_time_weight_scan)
-    hits_before_replay = dict(cached_time_hits)
     with torch.inference_mode():
         repeated = runner.run(hist, noise, cond, cfg, N_TIMESTEPS)
     assert torch.equal(got, repeated)
-    assert dict(cached_time_hits) == hits_before_replay
+    assert dispatch.call_count == 0
     assert runner.stats()["captures"] == 1 and runner.stats()["hits"] == 1
     torch.cuda.synchronize(device)
     runner.cache.clear()
@@ -230,10 +261,14 @@ def test_optimized_flow_hits_dispatch_and_retains_time_table(
     gc.collect()
     if time_cache:
         assert table_ref() is None and value_ref() is None
+    else:
+        pass
 
 
 @pytest.mark.accelerator
-def test_time_tables_follow_graph_lru_eviction(flow_dispatch_dit, device, monkeypatch):
+def test_time_tables_follow_graph_lru_eviction(
+    flow_dispatch_dit: DiT, device: torch.device, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1")
     monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
     execution, fallback = prepare_flow_dit(flow_dispatch_dit, "compile_bf16")

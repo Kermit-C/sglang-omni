@@ -9,11 +9,13 @@ from pathlib import Path
 
 import pytest
 import torch
+from sglang.srt.models.registry import ModelRegistry
 from transformers import AutoConfig
 
 from sglang_omni.config.resolver import ConfigResolver
 from sglang_omni.config.runtime import resolve_stage_typed_kwargs
 from sglang_omni.config.sources import patches_from_shared_block
+from sglang_omni.model_runner.sglang_model_runner import SGLModelRunner
 from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.hf_config import (
     FireRedTTS3Config,
@@ -21,24 +23,12 @@ from sglang_omni.models.firered_tts3.hf_config import (
     register_fireredtts3_hf_config,
 )
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
+from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 from sglang_omni.utils.json import JsonValue
 
 
-def test_firered_tts3_uses_framework_stage_boundaries() -> None:
-
-    config = FireRedTTS3PipelineConfig(model_path="model")
-
-    assert [stage.name for stage in config.stages] == [
-        "preprocessing",
-        "reference_encode",
-        "talker",
-        "vocoder",
-    ]
-    assert {stage.process for stage in config.stages} == {"pipeline"}
-    assert config.terminal_stages == ["vocoder"]
-    assert config.required_speech_reference_count == 1
-    assert config.speech_reference_text_required is True
+def test_firered_tts3_pipeline_is_registered() -> None:
     assert (
         PIPELINE_CONFIG_REGISTRY.get_config("FireRedTTS3ForConditionalGeneration")
         is FireRedTTS3PipelineConfig
@@ -97,6 +87,7 @@ def test_checkpoint_config_drives_pipeline_topology(
     pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
     assert pipeline.variant == variant
     assert [stage.name for stage in pipeline.stages] == stage_names
+    assert {stage.process for stage in pipeline.stages} == {"pipeline"}
     assert pipeline.stage_named("preprocessing").next == stage_names[1]
     assert pipeline.terminal_stages == ["vocoder"]
     assert pipeline.required_speech_reference_count == reference_count
@@ -137,41 +128,36 @@ def test_firered_tts3_shares_generation_schedule_via_shared() -> None:
 
 def test_firered_tts3_rejects_conflicting_preprocessing_schedule() -> None:
 
-    raw = FireRedTTS3PipelineConfig(model_path="model").model_dump()
-    stages = {item["name"]: item for item in raw["stages"]}
+    config_values = FireRedTTS3PipelineConfig(model_path="model").model_dump()
+    stages = {item["name"]: item for item in config_values["stages"]}
     stages["talker"]["factory"] = {"n_timesteps": 10}
     stages["preprocessing"]["factory"] = {"n_timesteps": 8}
     with pytest.raises(ValueError, match="n_timesteps"):
-        FireRedTTS3PipelineConfig(**raw)
+        FireRedTTS3PipelineConfig(**config_values)
 
 
 def test_firered_tts3_rejects_mismatched_vocoder_stream_slots() -> None:
 
-    raw = FireRedTTS3PipelineConfig(model_path="model").model_dump()
-    stages = {item["name"]: item for item in raw["stages"]}
+    config_values = FireRedTTS3PipelineConfig(model_path="model").model_dump()
+    stages = {item["name"]: item for item in config_values["stages"]}
     stages["talker"]["engine"]["max_running_requests"] = 8
     stages["vocoder"]["factory"]["stream_slots"] = 16
     with pytest.raises(ValueError, match="stream_slots"):
-        FireRedTTS3PipelineConfig(**raw)
+        FireRedTTS3PipelineConfig(**config_values)
 
 
 def test_firered_tts3_rejects_tp() -> None:
 
-    raw = FireRedTTS3PipelineConfig(model_path="model").model_dump()
-    stage = next(item for item in raw["stages"] if item["name"] == "talker")
+    config_values = FireRedTTS3PipelineConfig(model_path="model").model_dump()
+    stage = next(item for item in config_values["stages"] if item["name"] == "talker")
     stage["tp_size"] = 2
     stage["gpu"] = [0, 1]
     stage["process"] = "talker"
     with pytest.raises(ValueError, match="tp_size=1"):
-        FireRedTTS3PipelineConfig(**raw)
+        FireRedTTS3PipelineConfig(**config_values)
 
 
 def test_firered_tts3_model_registered_with_sglang() -> None:
-    from sglang.srt.models.registry import ModelRegistry
-
-    from sglang_omni.model_runner.sglang_model_runner import SGLModelRunner
-    from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
-
     SGLModelRunner.register_omni_model(SGLModelRunner)
 
     assert (
@@ -223,11 +209,11 @@ def test_firered_tts3_state_wire_round_trip() -> None:
     after = restored.to_dict()
 
     assert set(after) == set(before)
-    for f in dataclasses.fields(state):
-        expected = getattr(state, f.name)
-        actual = getattr(restored, f.name)
+    for state_field in dataclasses.fields(state):
+        expected = getattr(state, state_field.name)
+        actual = getattr(restored, state_field.name)
         if isinstance(expected, torch.Tensor):
-            assert isinstance(actual, torch.Tensor), f.name
-            assert torch.equal(actual, expected), f.name
+            assert isinstance(actual, torch.Tensor), state_field.name
+            assert torch.equal(actual, expected), state_field.name
         else:
-            assert actual == expected, f.name
+            assert actual == expected, state_field.name

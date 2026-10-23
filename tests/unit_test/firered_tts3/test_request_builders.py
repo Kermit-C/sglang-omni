@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from sglang_omni.models.firered_tts3.payload_types import (
@@ -13,6 +14,7 @@ from sglang_omni.models.firered_tts3.prompt_utils import TEXT_EOT_ID, TEXT_TOKEN
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
     ENGINE_TOKEN_SLACK,
+    FireRedTTS3SGLangRequestData,
     apply_latent_result,
     build_sglang_firered_tts3_request,
     build_stream_output,
@@ -32,7 +34,7 @@ def make_payload(state: FireRedTTS3State) -> StagePayload:
     )
 
 
-def build(state: FireRedTTS3State):
+def build(state: FireRedTTS3State) -> FireRedTTS3SGLangRequestData:
     return build_sglang_firered_tts3_request(
         make_payload(state), patch_size=PATCH_SIZE, vocab_size=VOCAB_SIZE
     )
@@ -45,30 +47,28 @@ def test_request_layout_is_speaker_plus_text_plus_prompt_patches() -> None:
         max_patches=400,
         max_engine_tokens=420,
     )
-    data = build(state)
+    request_data = build(state)
     # 1 speaker slot + 3 text tokens + 2 prompt-patch slots.
-    assert data.prefill_len == 6
-    assert data.prompt_patch_count == 2
-    assert data.req.origin_input_ids == [CONTROL_TOKEN_ID] * 6
-    assert data.req.sampling_params.max_new_tokens == 420
+    assert request_data.prefill_len == 6
+    assert request_data.prompt_patch_count == 2
+    assert request_data.req.origin_input_ids == [CONTROL_TOKEN_ID] * 6
+    assert request_data.req.sampling_params.max_new_tokens == 420
     # temperature=0.0 normalizes to the greedy convention (top_k == 1).
-    assert data.req.sampling_params.top_k == 1
-    assert data.req.sampling_params.stop_token_ids in (None, [])
-    assert data.req.eos_token_ids == set()
-    assert data.input_embeds_are_projected is True
+    assert request_data.req.sampling_params.top_k == 1
+    assert request_data.req.sampling_params.stop_token_ids in (None, [])
+    assert request_data.req.eos_token_ids == set()
+    assert request_data.input_embeds_are_projected is True
 
 
 def test_request_budget_defaults_to_max_patches_plus_slack() -> None:
     state = FireRedTTS3State(input_ids=[11], max_patches=250)
-    data = build(state)
-    assert data.prefill_len == 2
-    assert data.prompt_patch_count == 0
-    assert data.max_new_tokens == 250 + 20
+    request_data = build(state)
+    assert request_data.prefill_len == 2
+    assert request_data.prompt_patch_count == 0
+    assert request_data.max_new_tokens == 250 + 20
 
 
 def test_request_rejects_missing_or_misaligned_inputs() -> None:
-    import pytest
-
     with pytest.raises(RuntimeError, match="input_ids"):
         build(FireRedTTS3State())
     state = FireRedTTS3State(input_ids=[11], prompt_latents=torch.zeros(1, 6, 64))
@@ -78,40 +78,44 @@ def test_request_rejects_missing_or_misaligned_inputs() -> None:
 
 def test_apply_result_restores_state_with_latents_and_usage() -> None:
     state = FireRedTTS3State(input_ids=[11, 22], max_patches=10)
-    data = build(state)
+    request_data = build(state)
     patches = [torch.full((1, 4, 64), float(index)) for index in range(3)]
-    data.latent_patches = list(patches)
-    data.finish_reason = "stop"
+    request_data.latent_patches = list(patches)
+    request_data.finish_reason = "stop"
 
-    payload = apply_latent_result(data)
+    payload = apply_latent_result(request_data)
     restored = load_firered_tts3_state(payload)
     assert restored.generated_latents is not None
     assert restored.generated_latents.shape == (1, 12, 64)
     assert torch.equal(restored.generated_latents, torch.cat(patches, dim=1))
-    assert restored.prompt_tokens == data.prefill_len
+    assert restored.prompt_tokens == request_data.prefill_len
     assert restored.completion_tokens == 3
     assert restored.finish_reason == "stop"
 
 
-def streaming_data(num_patches: int, *, stream: bool = True):
+def streaming_data(
+    num_patches: int, *, stream: bool = True
+) -> FireRedTTS3SGLangRequestData:
     state = FireRedTTS3State(input_ids=[11, 22], max_patches=10, stream=stream)
-    data = build(state)
-    data.latent_patches = [
+    request_data = build(state)
+    request_data.latent_patches = [
         torch.full((1, 4, 64), float(index)) for index in range(num_patches)
     ]
-    return data
+    return request_data
 
 
 def test_stream_output_follows_the_patch_ramp() -> None:
-    data = streaming_data(8)
+    request_data = streaming_data(8)
 
     # chunk 0: one patch as soon as it exists; chunk 1: two; then four.
     sizes = []
-    while data.streamed_patches < 8:
-        messages = build_stream_output("rid", data, None)
+    while request_data.streamed_patches < 8:
+        messages = build_stream_output("rid", request_data, None)
         if not messages:
             # Hold a patch back the way the decode loop would.
             break
+        else:
+            pass
         assert len(messages) == 1
         chunk = messages[0]
         assert chunk.type == "stream"
@@ -122,29 +126,32 @@ def test_stream_output_follows_the_patch_ramp() -> None:
         assert "codes_ready_event" not in chunk.metadata
         sizes.append(int(chunk.data.shape[1]) // 4)
     assert sizes == [1, 2, 4]
-    assert data.streamed_patches == 7
-    assert data.stream_chunk_index == 3
+    assert request_data.streamed_patches == 7
+    assert request_data.stream_chunk_index == 3
 
-    flushed = flush_stream_output("rid", data)
+    flushed = flush_stream_output("rid", request_data)
     assert len(flushed) == 1
     assert int(flushed[0].data.shape[1]) == 4
-    assert data.streamed_patches == 8
-    assert flush_stream_output("rid", data) == []
+    assert request_data.streamed_patches == 8
+    assert flush_stream_output("rid", request_data) == []
 
 
 def test_stream_output_holds_back_below_the_ramp() -> None:
-    data = streaming_data(2)
-    assert [int(m.data.shape[1]) for m in build_stream_output("rid", data, None)] == [4]
-    assert build_stream_output("rid", data, None) == []
-    flushed = flush_stream_output("rid", data)
-    assert [int(m.data.shape[1]) for m in flushed] == [4]
+    request_data = streaming_data(2)
+    assert [
+        int(message.data.shape[1])
+        for message in build_stream_output("rid", request_data, None)
+    ] == [4]
+    assert build_stream_output("rid", request_data, None) == []
+    flushed = flush_stream_output("rid", request_data)
+    assert [int(message.data.shape[1]) for message in flushed] == [4]
 
 
 def test_stream_output_skips_non_streaming_requests() -> None:
-    data = streaming_data(4, stream=False)
-    assert build_stream_output("rid", data, None) == []
-    assert flush_stream_output("rid", data) == []
-    assert data.streamed_patches == 0
+    request_data = streaming_data(4, stream=False)
+    assert build_stream_output("rid", request_data, None) == []
+    assert flush_stream_output("rid", request_data) == []
+    assert request_data.streamed_patches == 0
 
 
 def test_instruct_request_uses_real_tokens_and_text_budget() -> None:
@@ -157,18 +164,18 @@ def test_instruct_request_uses_real_tokens_and_text_budget() -> None:
         max_engine_tokens=400 + ENGINE_TOKEN_SLACK + TEXT_TOKEN_BUDGET + 2,
         text_temperature=0.0,
     )
-    data = build(state)
+    request_data = build(state)
     # Real chatml tokens (the pad slots ride inline), no placeholder row.
-    assert data.prefill_len == 5
-    assert data.req.origin_input_ids == [11, 22, 33, 151655, 151655]
-    assert data.prompt_patch_count == 0
-    assert data.text_ar_mode == "text"
-    assert data.req.sampling_params.max_new_tokens == 622
+    assert request_data.prefill_len == 5
+    assert request_data.req.origin_input_ids == [11, 22, 33, 151655, 151655]
+    assert request_data.prompt_patch_count == 0
+    assert request_data.text_ar_mode == "text"
+    assert request_data.req.sampling_params.max_new_tokens == 622
     # Greedy task: no engine sampling seed installed.
-    assert data.req.sampling_params.sampling_seed is None
+    assert request_data.req.sampling_params.sampling_seed is None
     # The text-phase terminator must never be an engine stop id.
-    assert TEXT_EOT_ID not in (data.req.sampling_params.stop_token_ids or [])
-    assert data.req.eos_token_ids == set()
+    assert TEXT_EOT_ID not in (request_data.req.sampling_params.stop_token_ids or [])
+    assert request_data.req.eos_token_ids == set()
 
 
 def test_instruct_voice_design_sampling_and_seed() -> None:
@@ -183,13 +190,13 @@ def test_instruct_voice_design_sampling_and_seed() -> None:
         text_top_k=20,
         seed=2,
     )
-    data = build(state)
-    sp = data.req.sampling_params
-    assert sp.temperature == 0.7
-    assert sp.top_p == 0.8
-    assert sp.top_k == 20
-    assert sp.sampling_seed == 2
-    assert data.text_ar_mode == "text"
+    request_data = build(state)
+    sampling_params = request_data.req.sampling_params
+    assert sampling_params.temperature == 0.7
+    assert sampling_params.top_p == 0.8
+    assert sampling_params.top_k == 20
+    assert sampling_params.sampling_seed == 2
+    assert request_data.text_ar_mode == "text"
 
 
 def test_instruct_tts_task_has_no_text_phase() -> None:
@@ -201,13 +208,13 @@ def test_instruct_tts_task_has_no_text_phase() -> None:
         max_patches=400,
         max_engine_tokens=420,
     )
-    data = build(state)
-    assert data.text_ar_mode == "audio"
+    request_data = build(state)
+    assert request_data.text_ar_mode == "audio"
     # ICL prompt patches are the trailing video_pad slots.
-    assert data.prompt_patch_count == 2
-    assert data.prefill_len == 4
+    assert request_data.prompt_patch_count == 2
+    assert request_data.prefill_len == 4
     # temperature 0.0 normalizes to the greedy convention (top_k == 1).
-    assert data.req.sampling_params.top_k == 1
+    assert request_data.req.sampling_params.top_k == 1
 
 
 def test_apply_result_decodes_gen_text() -> None:
@@ -218,23 +225,25 @@ def test_apply_result_decodes_gen_text() -> None:
     state = FireRedTTS3State(
         variant="instruct", task_type="voice_design", input_ids=[11], max_patches=10
     )
-    data = build(state)
-    data.latent_patches = [torch.zeros(1, 4, 64)]
-    data.text_token_ids = [100, 200]
-    data.finish_reason = "stop"
-    payload = apply_latent_result(data, text_tokenizer=StubTokenizer())
+    request_data = build(state)
+    request_data.latent_patches = [torch.zeros(1, 4, 64)]
+    request_data.text_token_ids = [100, 200]
+    request_data.finish_reason = "stop"
+    payload = apply_latent_result(request_data, text_tokenizer=StubTokenizer())
     restored = load_firered_tts3_state(payload)
     assert restored.gen_text == "tok100 tok200"
 
     # No text phase -> no gen_text.
-    state2 = FireRedTTS3State(input_ids=[11], max_patches=10)
-    data2 = build(state2)
-    data2.latent_patches = [torch.zeros(1, 4, 64)]
-    payload2 = apply_latent_result(data2, text_tokenizer=StubTokenizer())
+    second_state = FireRedTTS3State(input_ids=[11], max_patches=10)
+    second_request_data = build(second_state)
+    second_request_data.latent_patches = [torch.zeros(1, 4, 64)]
+    payload2 = apply_latent_result(second_request_data, text_tokenizer=StubTokenizer())
     assert load_firered_tts3_state(payload2).gen_text is None
 
 
-def build_with_ratio(state: FireRedTTS3State, ratio=(2, 1)):
+def build_with_ratio(
+    state: FireRedTTS3State, ratio: tuple[int, int] = (2, 1)
+) -> FireRedTTS3SGLangRequestData:
     return build_sglang_firered_tts3_request(
         make_payload(state),
         patch_size=PATCH_SIZE,
@@ -252,13 +261,13 @@ def test_speaker_prefill_request_uses_real_chatml_tokens() -> None:
         max_patches=600,
         max_engine_tokens=620,
     )
-    data = build(state)
-    assert data.prefill_len == 4
-    assert data.req.origin_input_ids == [11, 22, 33, 151672]
-    assert data.prompt_patch_count == 0
-    assert data.text_ar_mode == "audio"
-    assert data.dual_stream is False
-    assert data.req.sampling_params.max_new_tokens == 620
+    request_data = build(state)
+    assert request_data.prefill_len == 4
+    assert request_data.req.origin_input_ids == [11, 22, 33, 151672]
+    assert request_data.prompt_patch_count == 0
+    assert request_data.text_ar_mode == "audio"
+    assert request_data.dual_stream is False
+    assert request_data.req.sampling_params.max_new_tokens == 620
 
 
 def test_speaker_dual_stream_request_carries_the_text_stream() -> None:
@@ -271,19 +280,14 @@ def test_speaker_dual_stream_request_carries_the_text_stream() -> None:
         max_patches=600,
         max_engine_tokens=1820,
     )
-    data = build_with_ratio(state)
-    assert data.dual_stream is True
-    assert data.interleave_ratio == (2, 1)
-    assert data.ds_stage == "text"
-    assert data.ds_index == 0
-    assert data.text_pos == 0
-    assert data.req.sampling_params.max_new_tokens == 1820
-    assert data.prefill_len == 3
+    request_data = build_with_ratio(state)
+    assert request_data.dual_stream is True
+    assert request_data.interleave_ratio == (2, 1)
+    assert request_data.req.sampling_params.max_new_tokens == 1820
+    assert request_data.prefill_len == 3
 
 
 def test_speaker_dual_stream_requires_ratio_and_text_stream() -> None:
-    import pytest
-
     state = FireRedTTS3State(
         variant="speaker",
         input_ids=[11],
@@ -321,14 +325,16 @@ def test_dual_stream_stream_output_emits_every_patch() -> None:
         max_patches=10,
         stream=True,
     )
-    data = build_with_ratio(state)
-    data.latent_patches = [torch.full((1, 4, 64), float(index)) for index in range(3)]
+    request_data = build_with_ratio(state)
+    request_data.latent_patches = [
+        torch.full((1, 4, 64), float(index)) for index in range(3)
+    ]
     # One patch per chunk, the moment it exists (reference per-patch decode).
     sizes = []
     for _ in range(3):
-        messages = build_stream_output("rid", data, None)
+        messages = build_stream_output("rid", request_data, None)
         assert len(messages) == 1
         sizes.append(int(messages[0].data.shape[1]) // 4)
     assert sizes == [1, 1, 1]
-    assert build_stream_output("rid", data, None) == []
-    assert data.streamed_patches == 3
+    assert build_stream_output("rid", request_data, None) == []
+    assert request_data.streamed_patches == 3

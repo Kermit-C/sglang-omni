@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Reference cache isolation, edit-cap keys, and encoder warmup."""
+"""Reference cache isolation, edit-cap keys, and cache bypass."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import torch
 
@@ -10,23 +12,26 @@ from sglang_omni.scheduling.reference_encoder import ReferenceEncodeService
 
 
 class StubReferenceBundle:
-    """Hook-facing bundle surface, with per-call distinct artifacts so a
-    cache hit is observable by value."""
+    """Distinct artifacts make cache hits observable without loading an audio model."""
 
-    sample_rate = 24000
-    pad_multiple = 3840
-    redae_scale = 1.0
-    spk_extractor = None
+    sample_rate: int = 24000
+    pad_multiple: int = 3840
+    redae_scale: float = 1.0
+    spk_extractor: torch.nn.Module | None = None
 
     def __init__(self) -> None:
-        self.encode_calls = 0
+        self.encode_calls: int = 0
 
-    def encode(self, path: str, max_seconds: float | None = None) -> dict:
+    def encode(
+        self, path: str, max_seconds: float | None = None
+    ) -> dict[str, torch.Tensor]:
         self.encode_calls += 1
         return {"prompt_latents": torch.full((1, 2, 4), float(self.encode_calls))}
 
 
-def make_service(bundle: StubReferenceBundle, *, cache_enabled: bool = True):
+def make_service(
+    bundle: StubReferenceBundle, *, cache_enabled: bool = True
+) -> ReferenceEncodeService:
     return ReferenceEncodeService(
         FireRedReferenceHook(bundle, model_id="stub", cache_enabled=cache_enabled),
         max_items=8,
@@ -34,7 +39,7 @@ def make_service(bundle: StubReferenceBundle, *, cache_enabled: bool = True):
     )
 
 
-def test_reference_cache_hit_reuses_stored_artifact(tmp_path) -> None:
+def test_reference_cache_hit_reuses_stored_artifact(tmp_path: Path) -> None:
     bundle = StubReferenceBundle()
     service = make_service(bundle)
     clip = tmp_path / "ref.wav"
@@ -46,15 +51,13 @@ def test_reference_cache_hit_reuses_stored_artifact(tmp_path) -> None:
     assert service.stats()["hits"] == 1
     assert torch.equal(first["prompt_latents"], second["prompt_latents"])
 
-    # Returned artifacts are per-call clones: mutating one must not pollute
-    # the stored entry.
     second["prompt_latents"].fill_(-1.0)
     third = service.get_or_encode((str(clip), None))
     assert torch.equal(third["prompt_latents"], first["prompt_latents"])
     service.close()
 
 
-def test_reference_cache_key_separates_edit_cap(tmp_path) -> None:
+def test_reference_cache_key_separates_edit_cap(tmp_path: Path) -> None:
     bundle = StubReferenceBundle()
     service = make_service(bundle)
     clip = tmp_path / "ref.wav"
@@ -67,7 +70,7 @@ def test_reference_cache_key_separates_edit_cap(tmp_path) -> None:
     service.close()
 
 
-def test_reference_cache_disabled_encodes_every_call(tmp_path) -> None:
+def test_reference_cache_disabled_encodes_every_call(tmp_path: Path) -> None:
     bundle = StubReferenceBundle()
     service = make_service(bundle, cache_enabled=False)
     clip = tmp_path / "ref.wav"

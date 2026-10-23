@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Flow execution policy and immutable fallback behavior."""
+"""CPU flow execution policy, numerical acceptance, and immutable fallback behavior."""
 
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ from sglang_omni.models.firered_tts3.compiled_dit import (
 )
 from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
 from sglang_omni.models.firered_tts3.dit import DiT
+from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
 from sglang_omni.models.firered_tts3.flow_graph import (
     FlowGraphRunner,
     flow_t_span,
     prepare_flow_dit,
 )
+from sglang_omni.models.firered_tts3.flow_precision import FlowPrecisionGate
 from sglang_omni.models.firered_tts3.packed_qkv import PackedQkvModel
 from tests.unit_test.fixtures.firered_tts3 import (
     HISTORY_LENGTH,
@@ -44,8 +46,6 @@ def test_flow_mode_validation() -> None:
             history_length=HISTORY_LENGTH,
             mode="fp16",
         )
-    from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
-
     with pytest.raises(ValueError, match="flow_mode"):
         FireRedTTS3EngineBuilder(flow_mode="fast")
 
@@ -73,7 +73,9 @@ def test_explicit_time_cache_protects_original_compiled_call(
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "0")
     monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", "conv1d")
     monkeypatch.setattr(torch.cuda, "graph_pool_handle", lambda: None)
-    config = torch._dynamo.config  # noqa: leading-underscore  # PyTorch compiler API
+    config = (
+        torch._dynamo.config
+    )  # noqa: SLF001  # leading-underscore: PyTorch compiler API
     observed: list[tuple[int, bool, bool]] = []
 
     def config_state() -> tuple[int, bool, bool]:
@@ -122,7 +124,7 @@ def test_explicit_time_cache_protects_original_compiled_call(
 @pytest.mark.parametrize("mode", ["fp32", "bf16"])
 @pytest.mark.parametrize("switch", ["time", "conv"])
 def test_flow_caches_require_compiled_execution(
-    monkeypatch, mode: str, switch: str
+    monkeypatch: pytest.MonkeyPatch, mode: str, switch: str
 ) -> None:
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", "1" if switch == "time" else "0")
     monkeypatch.setenv(
@@ -141,7 +143,7 @@ def test_flow_caches_require_compiled_execution(
     ],
 )
 def test_invalid_flow_cache_switches_fail(
-    monkeypatch, time_switch: str, conv_switch: str, message: str
+    monkeypatch: pytest.MonkeyPatch, time_switch: str, conv_switch: str, message: str
 ) -> None:
     monkeypatch.setenv("FIRERED_TTS3_PRECOMPUTE_TIME", time_switch)
     monkeypatch.setenv("FIREREDTTS3_CONV_LAYOUT", conv_switch)
@@ -149,7 +151,7 @@ def test_invalid_flow_cache_switches_fail(
         prepare_flow_dit(tiny_cpu_dit(), "compile_bf16")
 
 
-def test_private_model_keeps_source_and_forward_unchanged():
+def test_private_model_keeps_source_and_forward_unchanged() -> None:
     source = DiT(
         in_channels=20,
         out_channels=4,
@@ -159,9 +161,9 @@ def test_private_model_keeps_source_and_forward_unchanged():
         depth=2,
     ).eval()
     values = {name: tensor.clone() for name, tensor in source.state_dict().items()}
-    rng = torch.get_rng_state().clone()
+    random_state = torch.get_rng_state().clone()
     packed = PackedQkvModel(source)
-    assert torch.equal(torch.get_rng_state(), rng)
+    assert torch.equal(torch.get_rng_state(), random_state)
     assert packed.source is source and packed.model is not source
     assert all(
         torch.equal(source.state_dict()[name], tensor)
@@ -251,3 +253,113 @@ def test_time_gemm_cache_copies_snapshot_and_rejects_wrong_signature() -> None:
     with pytest.raises(TimeCacheUnavailable, match="signature changed"):
         with cached, cached.step(0):
             torch.addmm(bias, changed_stride, weight, out=output)
+
+
+@pytest.mark.parametrize("source", ["constructor", "environment"])
+def test_flow_precision_explicit_exact_checks_remain_byte_exact(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_ATOL", "0")
+    monkeypatch.setenv("FIRERED_TTS3_FLOW_RTOL", "0")
+    gate = (
+        FlowPrecisionGate()
+        if source == "constructor"
+        else FlowPrecisionGate.from_environment()
+    )
+    reference = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    exact = gate.compare(reference.t().contiguous().t(), reference)
+    assert exact.accepted and exact.byte_exact
+    assert not gate.compare(torch.tensor([0.0]), torch.tensor([-0.0])).accepted
+    changed = torch.nextafter(reference, torch.full_like(reference, float("inf")))
+    assert not gate.compare(changed, reference).accepted
+
+
+def test_flow_precision_default_budget_accepts_only_small_roundoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FIRERED_TTS3_FLOW_ATOL", raising=False)
+    monkeypatch.delenv("FIRERED_TTS3_FLOW_RTOL", raising=False)
+    gate = FlowPrecisionGate.from_environment()
+    reference = torch.tensor([[0.0, 1.0]])
+    close = torch.tensor([[0.0005, 1.005]])
+    assert gate.compare(close, reference).accepted
+    assert not FlowPrecisionGate().compare(close, reference).accepted
+    assert not gate.compare(torch.tensor([[0.002, 1.0]]), reference).accepted
+    assert not gate.compare(torch.tensor([[0.0, 1.02]]), reference).accepted
+
+
+@pytest.mark.parametrize(
+    "variable", ["FIRERED_TTS3_FLOW_ATOL", "FIRERED_TTS3_FLOW_RTOL"]
+)
+def test_flow_precision_rejects_invalid_environment(
+    monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    for value in ("-1", "nan", "inf", "-inf", "invalid"):
+        monkeypatch.setenv(variable, value)
+        with pytest.raises(ValueError, match=variable):
+            FlowPrecisionGate.from_environment()
+
+
+def test_flow_precision_rejects_nonfinite_values() -> None:
+    gate = FlowPrecisionGate(atol=100.0, rtol=100.0)
+    for value in (float("nan"), float("inf"), -float("inf")):
+        finite = torch.ones(2, 3)
+        nonfinite = finite.clone()
+        nonfinite[1, 2] = value
+        for actual, expected in (
+            (nonfinite, finite),
+            (finite, nonfinite),
+            (nonfinite, nonfinite),
+        ):
+            result = gate.compare(actual, expected)
+            assert not result.accepted and not result.finite
+
+
+@pytest.mark.parametrize("mismatch", ["shape", "dtype", "device"])
+def test_flow_precision_rejects_incompatible_tensors(mismatch: str) -> None:
+    reference = torch.ones(2, 3)
+    if mismatch == "shape":
+        actual = reference.flatten()
+    elif mismatch == "dtype":
+        actual = reference.double()
+    else:
+        actual = torch.empty_like(reference, device="meta")
+    result = FlowPrecisionGate(atol=100.0, rtol=100.0).compare(actual, reference)
+    assert not result.accepted and not result.schema_valid
+
+
+@pytest.mark.parametrize(
+    "reference,actual,atol,rtol,accepted",
+    [
+        (0.0, 0.125, 0.125, 0.0, True),
+        (0.0, 0.125 + 2**-26, 0.125, 0.0, False),
+        (2.0, 2.25, 0.0, 0.125, True),
+        (2.0, 2.25 + 2**-22, 0.0, 0.125, False),
+        (-2.0, -2.25, 0.0, 0.125, True),
+        (2.0, 2.375, 0.125, 0.125, True),
+        (2.0, 2.375 + 2**-22, 0.125, 0.125, False),
+        (0.0, 2**-24, 0.0, 100.0, False),
+        (2**-24, 2**-23, 0.0, 0.5, False),
+    ],
+)
+def test_flow_precision_elementwise_tolerance_boundaries(
+    reference: float,
+    actual: float,
+    atol: float,
+    rtol: float,
+    accepted: bool,
+) -> None:
+    result = FlowPrecisionGate(atol=atol, rtol=rtol).compare(
+        torch.tensor([actual]), torch.tensor([reference])
+    )
+    assert result.accepted == accepted
+    assert result.out_of_bounds == int(not accepted)
+
+
+def test_flow_precision_rejects_one_outlier_in_one_batch_row() -> None:
+    reference = torch.ones(8, 4, 64)
+    actual = reference.clone()
+    actual[-1, -1, -1] += 0.25
+    result = FlowPrecisionGate(atol=0.125, rtol=0.0).compare(actual, reference)
+    assert not result.accepted and result.out_of_bounds == 1
+    assert result.rmse < 0.125 and result.max_abs == 0.25
