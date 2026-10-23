@@ -7,10 +7,12 @@ from transformers import PreTrainedTokenizerFast
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
+from sglang_omni.models.firered_tts3.preprocessing import (
+    preprocess_firered_tts3_payload,
+)
 from sglang_omni.models.firered_tts3.request_builders import (
     build_sglang_firered_tts3_request,
 )
-from sglang_omni.models.firered_tts3.stages import preprocess_firered_tts3_payload
 from sglang_omni.proto import OmniRequest, StagePayload
 from sglang_omni.utils.json import JsonValue
 from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
@@ -434,6 +436,6 @@ def test_instruct_preprocessing_routes_tasks_to_model_prompts(
 @pytest.fixture
 def audio_patch_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "sglang_omni.models.firered_tts3.stages.count_audio_patches",
+        "sglang_omni.models.firered_tts3.instruct.count_audio_patches",
         lambda path, *, cap_seconds: 18,
     )

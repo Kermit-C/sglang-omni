@@ -13,6 +13,7 @@ from sglang_omni.models.firered_tts3.compiled_dit import (
     TimeGemmTable,
     finite_byte_equal,
 )
+from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.conv_cache import Conv1dWeightCache
 from sglang_omni.models.firered_tts3.dit import DiT
 from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
@@ -47,7 +48,13 @@ def test_flow_mode_validation() -> None:
             mode="fp16",
         )
     with pytest.raises(ValueError, match="flow_mode"):
-        FireRedTTS3EngineBuilder(flow_mode="fast")
+        pipeline = FireRedTTS3PipelineConfig(model_path="model")
+        FireRedTTS3EngineBuilder(
+            max_running_requests=pipeline.generation_admission_defaults()[
+                "max_running_requests"
+            ],
+            **{**pipeline.stage_factory_kwargs("talker"), "flow_mode": "fast"},
+        )
 
 
 def test_prepare_flow_dit_bf16_deepcopy_isolation() -> None:

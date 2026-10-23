@@ -15,16 +15,14 @@ from sglang_omni.models.firered_tts3.redae_decoder import (
     RedAEAudioDecoder,
     rematerialize_istft_window,
 )
-from sglang_omni.models.firered_tts3.vocoder import (
-    FireRedTTS3BatchVocoder,
-    FireRedTTS3StreamingVocoder,
-)
+from sglang_omni.models.firered_tts3.vocoder import FireRedTTS3BatchVocoder
 from sglang_omni.models.firered_tts3.vocoder_graph import RedAEVocoderGraphRunner
 from sglang_omni.pipeline.stage.stream_queue import StreamItem
 from sglang_omni.proto import StagePayload
 from tests.unit_test.fixtures.firered_tts3 import (
     audio_tensor,
     make_payload,
+    make_streaming_vocoder,
     run_streams,
 )
 
@@ -65,7 +63,7 @@ def test_streamed_audio_and_empty_tail_flush_match_full_decode(
     )
     batch = FireRedTTS3BatchVocoder(decoder, redae_scale=1.0, sample_rate=24000)
     [expected] = asyncio.run(batch.decode_payloads([make_payload(prompt, generated)]))
-    vocoder = FireRedTTS3StreamingVocoder(
+    vocoder = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -76,7 +74,7 @@ def test_streamed_audio_and_empty_tail_flush_match_full_decode(
         "request"
     ]
     torch.testing.assert_close(actual, audio_tensor(expected), rtol=1e-3, atol=1e-3)
-    fallback = FireRedTTS3StreamingVocoder(
+    fallback = make_streaming_vocoder(
         decoder, redae_scale=1.0, sample_rate=24000, stream_batching=False
     )
     fallback.handle_streaming_new_request("request", make_payload(prompt, generated))
@@ -104,7 +102,7 @@ def test_coalesced_streams_keep_request_audio_and_respect_slot_limit(
             1, 12 if index == 2 else 8, 64, generator=generator
         )
         generated[str(index)] = torch.randn(1, 28, 64, generator=generator)
-    vocoder = FireRedTTS3StreamingVocoder(
+    vocoder = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -119,7 +117,7 @@ def test_coalesced_streams_keep_request_audio_and_respect_slot_limit(
         widths = [call.args[0].shape[0] for call in forward.call_args_list]
     assert max(widths) == min(request_count, 2)
     for request_id in prompts:
-        serial = FireRedTTS3StreamingVocoder(
+        serial = make_streaming_vocoder(
             decoder,
             redae_scale=1.0,
             sample_rate=24000,
@@ -142,7 +140,7 @@ def test_coalesced_streams_keep_request_audio_and_respect_slot_limit(
 def test_stream_rejects_duplicate_prompt_and_nonpositive_context(
     decoder: RedAEAudioDecoder,
 ) -> None:
-    vocoder = FireRedTTS3StreamingVocoder(
+    vocoder = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -184,7 +182,7 @@ def test_graph_stream_replay_and_fallback_match_eager(
     generator = torch.Generator().manual_seed(seed)
     prompt = torch.randn(1, prompt_frames, 64, generator=generator)
     generated = torch.randn(1, generated_frames, 64, generator=generator)
-    eager = FireRedTTS3StreamingVocoder(
+    eager = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -195,7 +193,7 @@ def test_graph_stream_replay_and_fallback_match_eager(
         "request"
     ]
     uses_cold_graph = mode.startswith("cold_")
-    vocoder = FireRedTTS3StreamingVocoder(
+    vocoder = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -244,7 +242,7 @@ def test_coalesced_graph_stream_matches_eager(
         generated[str(index)] = torch.randn(
             1, (8 if cold_graph else 12) * 4, 64, generator=generator
         )
-    eager = FireRedTTS3StreamingVocoder(
+    eager = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -252,7 +250,7 @@ def test_coalesced_graph_stream_matches_eager(
         stream_batching=True,
     )
     expected = run_streams(eager, prompts, generated)
-    vocoder = FireRedTTS3StreamingVocoder(
+    vocoder = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,
@@ -283,7 +281,7 @@ def test_decode_stream_waits_for_chunk_event(
     chunk = torch.randn(1, 16, 64, generator=torch.Generator().manual_seed(23)).cuda()
     event = torch.cuda.Event()
     event.record()
-    vocoder = FireRedTTS3StreamingVocoder(
+    vocoder = make_streaming_vocoder(
         decoder,
         redae_scale=1.0,
         sample_rate=24000,

@@ -7,6 +7,11 @@ import weakref
 
 import torch
 
+try:
+    import cudnn
+except ImportError:
+    cudnn = None
+
 # note (Codex): verified against the original NCHW plan on SM120 with cuDNN 9.20.
 CUDNN_VERSION = 92000
 FRONTEND_VERSION = "1.28.0"
@@ -65,12 +70,12 @@ class ControlledConvPlan:
             raise RuntimeError("Controlled convolution requires SM120 and cuDNN 9.20")
         else:
             pass
-        try:
-            import cudnn
-        except ImportError as error:
+        if cudnn is None:
             raise RuntimeError(
                 f"Controlled convolution requires nvidia-cudnn-frontend=={FRONTEND_VERSION}"
-            ) from error
+            )
+        else:
+            pass
         if (
             cudnn.__version__ != FRONTEND_VERSION
             or cudnn.backend_version() != CUDNN_VERSION

@@ -12,21 +12,22 @@ import torch
 from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
 from sglang.srt.managers.utils import GenerationBatchResult
 
-from sglang_omni.models.firered_tts3.model_runner import (
+from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
+from sglang_omni.models.firered_tts3.prefill import text_output_token_count
+from sglang_omni.models.firered_tts3.prompt_utils import (
+    AUDIO_SOS_ID,
+    TEXT_EOT_ID,
+    TEXT_TOKEN_BUDGET,
+)
+from sglang_omni.models.firered_tts3.request_builders import (
+    CONTROL_TOKEN_ID,
     DS_STAGE_PATCH,
     TEXT_MODE_AUDIO,
     TEXT_MODE_AUDIO_ZERO,
     TEXT_MODE_FINALIZE,
     TEXT_MODE_SOSP,
     TEXT_MODE_TEXT,
-    FireRedTTS3ModelRunner,
 )
-from sglang_omni.models.firered_tts3.prompt_utils import (
-    AUDIO_SOS_ID,
-    TEXT_EOT_ID,
-    TEXT_TOKEN_BUDGET,
-)
-from sglang_omni.models.firered_tts3.request_builders import CONTROL_TOKEN_ID
 from sglang_omni.scheduling.types import SchedulerRequest
 from tests.unit_test.fixtures.firered_tts3 import (
     SmallFlowModel,
@@ -100,11 +101,10 @@ def test_single_history_invariant_at_every_pause(samples: list[int]) -> None:
         assert (
             generated
             == len(request_data.req.output_ids)
-            == len(request_data.latent_patches)
-            + runner.text_output_tokens(request_data)
+            == len(request_data.latent_patches) + text_output_token_count(request_data)
         )
         previous_mode = request_data.text_ar_mode
-        previous_cond = request_data.flow_state.backbone_cond
+        previous_cond = request_data.flow_state.backbone_conditioning
         runner.prepare_flow_row.reset_mock()
         token = prefill(runner, request, sampled)
         if previous_mode in (TEXT_MODE_FINALIZE, TEXT_MODE_SOSP):
@@ -114,7 +114,7 @@ def test_single_history_invariant_at_every_pause(samples: list[int]) -> None:
                 if previous_mode == TEXT_MODE_FINALIZE
                 else TEXT_MODE_AUDIO_ZERO
             )
-            assert request_data.flow_state.backbone_cond is previous_cond
+            assert request_data.flow_state.backbone_conditioning is previous_cond
             runner.prepare_flow_row.assert_not_called()
         elif previous_mode == TEXT_MODE_AUDIO_ZERO:
             assert (
@@ -185,8 +185,8 @@ def test_dual_reprefill_matches_uninterrupted_decode_at_every_pause(
         ):
             assert torch.equal(actual, expected)
         torch.testing.assert_close(
-            request_data.flow_state.backbone_cond,
-            continuous.data.flow_state.backbone_cond,
+            request_data.flow_state.backbone_conditioning,
+            continuous.data.flow_state.backbone_conditioning,
         )
         request_data.req.output_ids.append(token)
     assert len(request_data.latent_patches) == 3 * ratio[1]
@@ -298,9 +298,9 @@ def test_deferred_stop_survives_repeated_retraction_until_decode(
             torch.full((excess,), CONTROL_TOKEN_ID, dtype=torch.long)
         )
         torch.testing.assert_close(rows[-excess:], expected)
-        cond = request_data.flow_state.backbone_cond
+        cond = request_data.flow_state.backbone_conditioning
         assert prefill(runner, request) == CONTROL_TOKEN_ID
-        assert request_data.flow_state.backbone_cond is cond
+        assert request_data.flow_state.backbone_conditioning is cond
         assert list(request_data.req.output_ids) == output_ids
         assert (
             request_data.text_ar_mode,

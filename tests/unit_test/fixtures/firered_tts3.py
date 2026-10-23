@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypedDict
 
 import pytest
 import torch
@@ -11,28 +11,28 @@ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.utils import GenerationBatchResult
 from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
+from typing_extensions import Unpack
 
+from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.dit import DiT
 from sglang_omni.models.firered_tts3.flow_graph import (
     FlowGraphRunner,
     euler_flow_loop,
     flow_t_span,
 )
-from sglang_omni.models.firered_tts3.model_runner import (
-    FireRedTTS3ModelRunner,
-    FlowState,
-)
+from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
 from sglang_omni.models.firered_tts3.patch_encoder import PatchEncoder
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
 from sglang_omni.models.firered_tts3.redae_decoder import RedAEAudioDecoder
 from sglang_omni.models.firered_tts3.request_builders import (
+    FlowState,
     build_sglang_firered_tts3_request,
 )
 from sglang_omni.models.firered_tts3.vocoder import FireRedTTS3StreamingVocoder
 from sglang_omni.models.firered_tts3.weights import drop_embedding_tables
 from sglang_omni.pipeline.stage.stream_queue import StreamItem
-from sglang_omni.proto import OmniRequest, StagePayload
+from sglang_omni.proto.request import OmniRequest, StagePayload
 from sglang_omni.scheduling.message import IncomingMessage
 from sglang_omni.scheduling.types import SchedulerRequest
 
@@ -316,7 +316,9 @@ def run_streams(
             completed.add(message.request_id)
     assert completed == set(prompts)
     assert vocoder.stream_states == {} and vocoder.stream_payloads == {}
-    assert all(state.decoder_state is None and state.pending == [] for state in states)
+    assert all(
+        state.decoder_state is None and state.pending_latents == [] for state in states
+    )
     return {request_id: torch.cat(chunks) for request_id, chunks in waveforms.items()}
 
 
@@ -352,6 +354,9 @@ def make_flow_runner(
     runner.async_enabled = False
     runner.flow_batching = batching
     runner.flow_graphs = None
+    runner.control_token_fastpath = True
+    runner.skip_min_patch_stop = True
+    runner.prefill_launch_at = None
     runner.t_span_cache = {}
     runner.active_requests = {}
     return runner
@@ -392,9 +397,9 @@ def make_flow_request(
     request_data.flow_state = FlowState(
         generator=torch.Generator().manual_seed(index),
         prompt_patch_count=0,
-        spk_cond_dit=None,
-        backbone_cond=torch.zeros(1, 2, 8),
-        latents_gen=torch.zeros(1, 8, 64),
+        speaker_conditioning=None,
+        backbone_conditioning=torch.zeros(1, 2, 8),
+        latent_history=torch.zeros(1, 8, 64),
         patch_count=6 if stopped else 0,
     )
     request_data.req.set_extend_range(0, request_data.prefill_len)
@@ -413,4 +418,37 @@ def make_flow_result(
         logits_output=LogitsProcessorOutput(
             next_token_logits=None, hidden_states=hidden_states
         ),
+    )
+
+
+class StreamingVocoderOverrides(TypedDict, total=False):
+    max_batch_size: int
+    max_batch_wait_ms: float
+    stream_slots: int
+    prompt_predecode: bool
+    stream_batching: bool
+    separate_decode_stream: bool
+    incremental_cuda_graph: bool
+    cuda_graph_latent_sizes: list[int] | None
+    cuda_graph_batch_sizes: list[int] | None
+    cold_cuda_graph: bool
+    cold_cuda_graph_latent_sizes: list[int] | None
+    cold_cuda_graph_batch_sizes: list[int] | None
+
+
+def make_streaming_vocoder(
+    decoder: RedAEAudioDecoder,
+    *,
+    redae_scale: float,
+    sample_rate: int,
+    **overrides: Unpack[StreamingVocoderOverrides],
+) -> FireRedTTS3StreamingVocoder:
+    configuration = FireRedTTS3PipelineConfig(model_path="model")
+    factory_parameters = configuration.stage_factory_kwargs("vocoder")
+    factory_parameters.pop("warmup_on_init")
+    return FireRedTTS3StreamingVocoder(
+        decoder,
+        redae_scale=redae_scale,
+        sample_rate=sample_rate,
+        **{**factory_parameters, **overrides},
     )

@@ -52,7 +52,7 @@ class Conv1dWeightCache(TorchDispatchMode):
                     ),
                     version=(
                         None if torch.is_inference(weight) else weight._version
-                    ),  # noqa: leading-underscore  # PyTorch tensor version API
+                    ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
                 )
             else:
                 pass
@@ -69,7 +69,7 @@ class Conv1dWeightCache(TorchDispatchMode):
             current = self.module.get_parameter(entry.name)
             version = (
                 None if torch.is_inference(current) else current._version
-            )  # noqa: leading-underscore  # PyTorch tensor version API
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             if (
                 current.data_ptr() != pointer
                 or current.shape != entry.source.shape

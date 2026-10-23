@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast
 
 import torch
 from torch._ops import OpOverload
@@ -13,6 +13,11 @@ from torch.utils._python_dispatch import TorchDispatchMode
 
 from sglang_omni.models.firered_tts3.modules import Attention
 from sglang_omni.models.firered_tts3.packed_qkv import PackedQkvModel
+
+try:
+    from sglang_omni.models.firered_tts3.ffn_gemm_kernel import gemm_out
+except ImportError:
+    gemm_out = None
 
 # note (Codex): measured SM120 tiles; small FFN1 and M192 QKV use K128 rounding.
 FFN_CONFIGS = {
@@ -25,6 +30,17 @@ FFN_LAYERS = 11
 CompileBackend = Callable[
     [torch.fx.GraphModule, list[torch.Tensor]], Callable[..., tuple[torch.Tensor, ...]]
 ]
+
+
+class GemmOutput(Protocol):
+    def __call__(
+        self,
+        inputs: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        out: torch.Tensor,
+        config: tuple[int, int, int, int, int],
+    ) -> torch.Tensor: ...
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -51,10 +67,10 @@ class FfnWeight:
             output_size=weight.shape[0],
             version=(
                 None if torch.is_inference(weight) else weight._version
-            ),  # noqa: leading-underscore  # PyTorch tensor version API
+            ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             bias_version=(
                 None if torch.is_inference(bias) else bias._version
-            ),  # noqa: leading-underscore  # PyTorch tensor version API
+            ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
         )
 
 
@@ -76,19 +92,7 @@ class FfnGemmMode(TorchDispatchMode):
         self.misses = 0
         self.enabled = False
         self.reason = "DiT GEMM optimization requires eleven CUDA BF16 Linear layers"
-        self.gemm_out: (
-            Callable[
-                [
-                    torch.Tensor,
-                    torch.Tensor,
-                    torch.Tensor,
-                    torch.Tensor,
-                    tuple[int, int, int, int, int],
-                ],
-                torch.Tensor,
-            ]
-            | None
-        ) = None
+        self.gemm_out: GemmOutput | None = None
         layers = [
             (name, layer)
             for name, layer in source.named_modules()
@@ -120,9 +124,10 @@ class FfnGemmMode(TorchDispatchMode):
                 )
                 return
             else:
-                # note (Codex): Triton is optional outside the supported CUDA backend.
-                from sglang_omni.models.firered_tts3.ffn_gemm_kernel import gemm_out
-
+                if gemm_out is None:
+                    raise RuntimeError("DiT GEMM optimization requires Triton")
+                else:
+                    pass
                 self.gemm_out = gemm_out
                 self.weights = {
                     layer.weight.data_ptr(): FfnWeight.from_linear(name, layer)
@@ -233,10 +238,10 @@ class FfnGemmMode(TorchDispatchMode):
             bias = self.source.get_parameter(entry.name.removesuffix("weight") + "bias")
             version = (
                 None if torch.is_inference(current) else current._version
-            )  # noqa: leading-underscore  # PyTorch tensor version API
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             bias_version = (
                 None if torch.is_inference(bias) else bias._version
-            )  # noqa: leading-underscore  # PyTorch tensor version API
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             if (
                 current is not entry.source
                 or bias is not entry.bias

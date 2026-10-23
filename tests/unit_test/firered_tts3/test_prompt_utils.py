@@ -3,10 +3,18 @@
 
 from __future__ import annotations
 
+import base64
+import io
+from pathlib import Path
+from unittest.mock import patch
+
+import httpx
+import numpy as np
 import pytest
-import torch
+import soundfile as sf
 
 from sglang_omni.models.firered_tts3 import prompt_utils
+from sglang_omni.models.firered_tts3.instruct import count_audio_patches
 from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
 
 
@@ -38,15 +46,47 @@ def test_speaker_text_expands_han_tokens_and_preserves_unknown_characters(
     ]
 
 
-def test_count_latent_patches_arithmetic() -> None:
-    # 24 kHz identity path: 1 patch = 3840 samples.
-    wav = torch.zeros(1, 10000)
-    _, n_patches = prompt_utils.count_latent_patches(wav, 24000)
-    assert n_patches == 3  # ceil(10000 / 3840)
-    wav16k = torch.zeros(1, 16000)  # 1 s
-    wav24k, n_patches = prompt_utils.count_latent_patches(wav16k, 16000)
-    assert wav24k.shape[1] == 24000
-    assert n_patches == 7  # ceil(24000 / 3840)
+@pytest.mark.parametrize(
+    "sample_rate,sample_count,cap_seconds,expected_patches",
+    [
+        (24000, 3840, None, 1),
+        (24000, 3841, None, 2),
+        (16000, 2561, None, 2),
+        (44100, 7056, None, 1),
+        (44100, 7057, None, 2),
+        (16000, 320001, 20.0, 125),
+    ],
+)
+def test_audio_prompt_slots_follow_resampled_patch_boundaries(
+    tmp_path: Path,
+    sample_rate: int,
+    sample_count: int,
+    cap_seconds: float | None,
+    expected_patches: int,
+) -> None:
+    """Audio source formats must agree on patch slots after resampling and edit caps."""
+    encoded_audio = io.BytesIO()
+    sf.write(
+        encoded_audio,
+        np.zeros(sample_count, dtype=np.float32),
+        sample_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+    audio_bytes = encoded_audio.getvalue()
+    audio_path = tmp_path / "reference.wav"
+    audio_path.write_bytes(audio_bytes)
+    audio_uri = f"data:audio/wav;base64,{base64.b64encode(audio_bytes).decode('ascii')}"
+    audio_url = "https://audio.example.test/reference.wav"
+    response = httpx.Response(
+        200, content=audio_bytes, request=httpx.Request("GET", audio_url)
+    )
+    with patch("sglang_omni.utils.audio.httpx.get", return_value=response):
+        for reference in (str(audio_path), audio_uri, audio_url):
+            assert (
+                count_audio_patches(reference, cap_seconds=cap_seconds)
+                == expected_patches
+            )
 
 
 def test_compose_acoustic_instruction_templates() -> None:

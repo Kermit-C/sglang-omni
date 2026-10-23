@@ -1,46 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""RedAE audio encoder (ICL prompt-audio latents for the talker).
-
-Ported from the FireRedTTS3 reference implementation
-(fireredtts3/redae/redae.py, RedAEAudioEncoder + Qwen3ClsDownsample). The
-talker uses this to encode reference audio into prompt latents during
-prefill preprocessing — one-shot, outside the decode hot loop. The matching
-decoder lives in redae_decoder.py; both load from the checkpoint's redae/
-weight subdirectory (encoder.* / decoder.* prefixes).
-
-Backbone: HF transformers Qwen3Model (as in the reference), 18 layers
-all-SWA(64) + a CLS-token 2x downsample block. The reference pins
-flash_attention_2 on the encoder and runs encode under bf16 autocast; the
-attention backend here follows the transformers default (sdpa), which the
-production deployment parity notes already cover. The bf16 autocast wrapper
-stays at the call site.
-"""
+"""Encode reference audio into RedAE conditioning latents."""
 
 import torch
 import torch.nn as nn
 from transformers import Qwen3Config, Qwen3Model
 
+MAX_DOWNSAMPLE_PATCHES_PER_BATCH = 32768
+
 
 class Qwen3ClsDownsample(torch.nn.Module):
+
     def __init__(
         self,
         in_dim: int,
         out_dim: int,
         downsample_rate: int = 2,
-        # Qwen
         hidden_size: int = 896,
         intermediate_size: int = 896 * 4,
         num_hidden_layers: int = 4,
         max_position_embeddings: int = 32768,
         num_attention_heads: int = 14,
         num_key_value_heads: int = 2,
-    ):
+    ) -> None:
         super().__init__()
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.downsample_rate = downsample_rate
-        self.qwen3_config = Qwen3Config(
+        self.in_dim: int = in_dim
+        self.out_dim: int = out_dim
+        self.downsample_rate: int = downsample_rate
+        self.qwen3_config: Qwen3Config = Qwen3Config(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             num_hidden_layers=num_hidden_layers,
@@ -48,56 +35,49 @@ class Qwen3ClsDownsample(torch.nn.Module):
             num_attention_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
         )
-        self.qwen3 = Qwen3Model(self.qwen3_config)
-        self.cls_tok = torch.nn.Parameter(torch.ones(1, 1, hidden_size))
-        # Input & output proj
-        self.in_proj = (
+        self.qwen3: Qwen3Model = Qwen3Model(self.qwen3_config)
+        self.cls_tok: torch.nn.Parameter = torch.nn.Parameter(
+            torch.ones(1, 1, hidden_size)
+        )
+        self.in_proj: torch.nn.Linear | torch.nn.Identity = (
             torch.nn.Linear(in_dim, hidden_size)
             if in_dim != hidden_size
             else torch.nn.Identity()
         )
-        self.out_proj = (
+        self.out_proj: torch.nn.Linear | torch.nn.Identity = (
             torch.nn.Linear(hidden_size, out_dim)
             if out_dim != hidden_size
             else torch.nn.Identity()
         )
 
-    def forward(self, xs: torch.Tensor):
-        """Downsample latents as BERT [CLS] token.
-
-        Args:
-            xs(torch.Tensor): shape (b, t, c).
-        Returns:
-            ys(torch.Tensor): shape (b, t//downsample_rate, c).
-        """
-        assert xs.shape[1] % self.downsample_rate == 0, xs.shape
-        b = xs.shape[0]
-        # Patchify, (b, t, c) -> (b*t/down, down, c)
-        xs = xs.reshape(-1, self.downsample_rate, self.in_dim)
-        xs = self.in_proj(xs)
-        cls_tok = self.cls_tok.expand(xs.shape[0], -1, -1)
-        xs = torch.cat([xs, cls_tok], dim=1)  # (b*t/down, down+1, c)
-        # Forward LLM
-        ys = []
-        for xs_chunk in torch.split(xs, 32768, dim=0):  # attention kernel limits
-            outs_chunk = self.qwen3(inputs_embeds=xs_chunk)
-            ys_chunk = outs_chunk.last_hidden_state[:, -1]  # (b*t/down, c)
-            ys.append(ys_chunk)
-        ys = torch.cat(ys, dim=0)
-        ys = self.out_proj(ys)
-        ys = ys.reshape(b, -1, self.out_dim)
-        return ys
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Downsample latents as BERT [CLS] token."""
+        assert hidden_states.shape[1] % self.downsample_rate == 0, hidden_states.shape
+        batch_size = hidden_states.shape[0]
+        hidden_states = hidden_states.reshape(-1, self.downsample_rate, self.in_dim)
+        hidden_states = self.in_proj(hidden_states)
+        cls_tok = self.cls_tok.expand(hidden_states.shape[0], -1, -1)
+        hidden_states = torch.cat([hidden_states, cls_tok], dim=1)
+        output_embeddings = []
+        for chunk_hidden_states in torch.split(
+            hidden_states, MAX_DOWNSAMPLE_PATCHES_PER_BATCH, dim=0
+        ):
+            chunk_output = self.qwen3(inputs_embeds=chunk_hidden_states)
+            chunk_embeddings = chunk_output.last_hidden_state[:, -1]
+            output_embeddings.append(chunk_embeddings)
+        output_embeddings = torch.cat(output_embeddings, dim=0)
+        output_embeddings = self.out_proj(output_embeddings)
+        output_embeddings = output_embeddings.reshape(batch_size, -1, self.out_dim)
+        return output_embeddings
 
 
 class RedAEAudioEncoder(torch.nn.Module):
+
     def __init__(
         self,
-        # Output
         out_dim: int = 1024,
-        # Input reshape
-        audio_patch_size: int = 480,  # 50Hz
+        audio_patch_size: int = 480,
         audio_sample_rate: int = 24000,
-        # Qwen
         hidden_size: int = 896,
         intermediate_size: int = 896 * 4,
         num_hidden_layers: int = 24,
@@ -107,20 +87,19 @@ class RedAEAudioEncoder(torch.nn.Module):
         num_key_value_heads: int = 2,
         sliding_window: int = 64,
         use_sliding_window: bool = True,
-        # Extra downsample
-        extra_downsample_rate: int = 2,  # 50Hz -> 25Hz
+        extra_downsample_rate: int = 2,
         downsample_num_hidden_layers: int = 4,
-    ):
+    ) -> None:
         super().__init__()
-        self.audio_patch_size = audio_patch_size
-        self.audio_sample_rate = audio_sample_rate
-        self.extra_downsample_rate = extra_downsample_rate
-        self.out_dim = out_dim
-        self.in_proj = nn.Sequential(
+        self.audio_patch_size: int = audio_patch_size
+        self.audio_sample_rate: int = audio_sample_rate
+        self.extra_downsample_rate: int = extra_downsample_rate
+        self.out_dim: int = out_dim
+        self.in_proj: nn.Sequential = nn.Sequential(
             nn.Linear(self.audio_patch_size, hidden_size),
             nn.Linear(hidden_size, hidden_size),
         )
-        self.qwen3_config = Qwen3Config(
+        self.qwen3_config: Qwen3Config = Qwen3Config(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             num_hidden_layers=num_hidden_layers,
@@ -131,9 +110,9 @@ class RedAEAudioEncoder(torch.nn.Module):
             sliding_window=sliding_window,
             use_sliding_window=use_sliding_window,
         )
-        self.qwen3 = Qwen3Model(self.qwen3_config)
+        self.qwen3: Qwen3Model = Qwen3Model(self.qwen3_config)
         if self.extra_downsample_rate > 1:
-            self.downsample = Qwen3ClsDownsample(
+            self.downsample: Qwen3ClsDownsample = Qwen3ClsDownsample(
                 in_dim=hidden_size,
                 out_dim=hidden_size,
                 downsample_rate=extra_downsample_rate,
@@ -146,45 +125,31 @@ class RedAEAudioEncoder(torch.nn.Module):
             )
         else:
             pass
-        self.out_proj = nn.Linear(hidden_size, out_dim)
+        self.out_proj: nn.Linear = nn.Linear(hidden_size, out_dim)
 
     @property
-    def downsample_rate(self):
+    def downsample_rate(self) -> int:
         return int(self.audio_patch_size * self.extra_downsample_rate)
 
     @property
-    def sample_rate(self):
+    def sample_rate(self) -> int:
         return self.audio_sample_rate
 
     @property
-    def hidden_size(self):
+    def hidden_size(self) -> int:
         return self.out_dim
 
-    def forward(self, audio: torch.Tensor):
-        """
-        Args:
-            audio(torch.Tensor): shape (b, t)
-        Returns:
-            xs(torch.Tensor): shape (b, t//self.downsample_rate, self.hidden_size)
-        """
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
         assert audio.shape[1] % self.downsample_rate == 0, audio.shape
-        # Patchify
-        xs = audio.unfold(
-            dimension=1,
-            size=self.audio_patch_size,
-            step=self.audio_patch_size,
-        )  # (b, num_patch, patch_size) ~ (b, t, c)
-        # LLM
-        xs = self.in_proj(xs)
-        outs = self.qwen3(
-            inputs_embeds=xs,
-            attention_mask=None,
+        hidden_states = audio.unfold(
+            dimension=1, size=self.audio_patch_size, step=self.audio_patch_size
         )
-        xs = outs.last_hidden_state  # (b, t, c)
-        # Downsample
+        hidden_states = self.in_proj(hidden_states)
+        model_output = self.qwen3(inputs_embeds=hidden_states, attention_mask=None)
+        hidden_states = model_output.last_hidden_state
         if self.extra_downsample_rate > 1:
-            xs = self.downsample(xs)
+            hidden_states = self.downsample(hidden_states)
         else:
             pass
-        xs = self.out_proj(xs)
-        return xs
+        hidden_states = self.out_proj(hidden_states)
+        return hidden_states

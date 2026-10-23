@@ -10,14 +10,14 @@ import pytest
 import torch
 from sglang.srt.managers.utils import GenerationBatchResult
 
-from sglang_omni.models.firered_tts3.model_runner import (
+from sglang_omni.models.firered_tts3.model_runner import FireRedTTS3ModelRunner
+from sglang_omni.models.firered_tts3.prompt_utils import AUDIO_SOS_ID, TEXT_EOT_ID
+from sglang_omni.models.firered_tts3.request_builders import (
+    CONTROL_TOKEN_ID,
     TEXT_MODE_AUDIO,
     TEXT_MODE_FINALIZE,
     TEXT_MODE_TEXT,
-    FireRedTTS3ModelRunner,
 )
-from sglang_omni.models.firered_tts3.prompt_utils import AUDIO_SOS_ID, TEXT_EOT_ID
-from sglang_omni.models.firered_tts3.request_builders import CONTROL_TOKEN_ID
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.types import SchedulerOutput, SchedulerRequest
 from tests.unit_test.fixtures.firered_tts3 import (

@@ -1,26 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Checkpoint key routing and component loading for FireRedTTS3.
-
-One root safetensors carries the talker (backbone_llm.* + side path) and a
-redae/ subdirectory carries the shared audio autoencoder:
-
-* backbone_llm.model.* (Instruct / speaker, Qwen3ForCausalLM layout) and
-  backbone_llm.* (Base, bare Qwen3Model layout) -> the backbone; the
-  backbone_llm.lm_head.weight copy in speaker checkpoints is a tied clone and
-  is dropped (Instruct checkpoints carry no lm_head key at all — the head
-  is tied to embed_tokens at load).
-* patch_encoder. / dit. / dit_head. / stop_head. / spk_proj_llm. /
-  spk_proj_dit. -> the fp32 side path.
-* redae/encoder.* and redae/decoder.* -> the RedAE modules. Every
-  qwen3 embed_tokens table in redae/ (151936 x 896 each, ~544 MiB) is dead
-  weight — both modules consume inputs_embeds only — so the keys are
-  skipped at read time and the modules are set to None.
-"""
+"""Route FireRedTTS3 checkpoint keys and load acoustic components."""
 
 from __future__ import annotations
 
 from collections.abc import Container
 from pathlib import Path
+from typing import Literal
 
 import torch
 from safetensors import safe_open
@@ -33,7 +18,6 @@ from sglang_omni.models.firered_tts3.redae_decoder import RedAEAudioDecoder
 from sglang_omni.models.firered_tts3.redae_encoder import RedAEAudioEncoder
 
 BACKBONE_LLM_PREFIX = "backbone_llm."
-# Instruct / speaker nest the Qwen3Model one level deeper (Qwen3ForCausalLM).
 BACKBONE_MODEL_INFIX = "model."
 BACKBONE_LM_HEAD_PREFIX = "backbone_llm.lm_head."
 SIDE_PATH_PREFIXES = (
@@ -44,16 +28,23 @@ SIDE_PATH_PREFIXES = (
     "spk_proj_llm.",
     "spk_proj_dit.",
 )
-
 CAMPP_RELATIVE_PATH = Path("campp") / "campplus_voxceleb.bin"
 
 
-def route_root_key(key: str) -> str:
-    """Classify a root-checkpoint key into its component bucket.
-
-    Returns one of: "backbone", "lm_head", "patch_encoder", "dit",
-    "dit_head", "stop_head", "spk_proj_llm", "spk_proj_dit", "unknown".
-    """
+def route_root_key(
+    key: str,
+) -> Literal[
+    "backbone",
+    "lm_head",
+    "patch_encoder",
+    "dit",
+    "dit_head",
+    "stop_head",
+    "spk_proj_llm",
+    "spk_proj_dit",
+    "unknown",
+]:
+    """Classify a root-checkpoint key into its component bucket."""
     if key.startswith(BACKBONE_LM_HEAD_PREFIX):
         return "lm_head"
     else:
@@ -77,16 +68,9 @@ def strip_backbone_prefix(key: str) -> str:
 
 
 def read_component_tensors(
-    checkpoint_dir: Path,
-    prefix: str,
-    *,
-    skip_if: Container[str] = frozenset(),
+    checkpoint_dir: Path, prefix: str, *, skip_if: Container[str] = frozenset()
 ) -> dict[str, torch.Tensor]:
-    """Read the prefix-matching tensors of a checkpoint dir, prefix-stripped.
-
-    skip_if matches against the STRIPPED key. Supports both a single
-    model.safetensors and sharded layouts.
-    """
+    """Read the prefix-matching tensors of a checkpoint dir, prefix-stripped."""
     tensors: dict[str, torch.Tensor] = {}
     for shard in sorted(checkpoint_dir.glob("*.safetensors")):
         with safe_open(str(shard), framework="pt", device="cpu") as handle:
@@ -165,11 +149,7 @@ def build_redae_decoder(config: FireRedTTS3Config) -> RedAEAudioDecoder:
 
 
 def drop_embedding_tables(module: torch.nn.Module) -> None:
-    """Set every embed_tokens submodule to None (inputs_embeds-only modules).
-
-    Must run BEFORE load_state_dict so the skipped checkpoint keys and the
-    module key space agree.
-    """
+    """Set every embed_tokens submodule to None (inputs_embeds-only modules)."""
     targets = [
         parent
         for parent in module.modules()
@@ -178,24 +158,6 @@ def drop_embedding_tables(module: torch.nn.Module) -> None:
     ]
     for parent in targets:
         parent.embed_tokens = None
-
-
-def load_dit(
-    model_path: str, config: FireRedTTS3Config, *, device: torch.device | str
-) -> DiT:
-    module = build_dit(config)
-    state = read_component_tensors(Path(model_path), "dit.")
-    module.load_state_dict(state, strict=True)
-    return module.to(device=device, dtype=torch.float32).eval()
-
-
-def load_patch_encoder(
-    model_path: str, config: FireRedTTS3Config, *, device: torch.device | str
-) -> PatchEncoder:
-    module = build_patch_encoder(config)
-    state = read_component_tensors(Path(model_path), "patch_encoder.")
-    module.load_state_dict(state, strict=True)
-    return module.to(device=device, dtype=torch.float32).eval()
 
 
 def load_redae_encoder(
@@ -218,9 +180,7 @@ def load_redae_decoder(
     module = build_redae_decoder(config)
     drop_embedding_tables(module)
     state = read_component_tensors(
-        Path(model_path) / "redae",
-        "decoder.",
-        skip_if={"qwen3.embed_tokens.weight"},
+        Path(model_path) / "redae", "decoder.", skip_if={"qwen3.embed_tokens.weight"}
     )
     module.load_state_dict(state, strict=True)
     return module.to(device=device, dtype=torch.float32).eval()
@@ -253,8 +213,6 @@ __all__ = [
     "build_redae_encoder",
     "drop_embedding_tables",
     "load_campp",
-    "load_dit",
-    "load_patch_encoder",
     "load_redae_decoder",
     "load_redae_encoder",
     "read_component_tensors",

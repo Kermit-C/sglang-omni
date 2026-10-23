@@ -123,6 +123,7 @@ def test_firered_tts3_shares_generation_schedule_via_shared() -> None:
     assert resolved.stage_factory_kwargs("preprocessing") == {
         "n_timesteps": 8,
         "max_patches": 256,
+        "max_concurrency": 8,
     }
 
 

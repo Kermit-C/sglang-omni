@@ -90,7 +90,7 @@ class PackedQkvModel:
                 device=value.device,
                 version=(
                     None if torch.is_inference(value) else value._version
-                ),  # noqa: leading-underscore  # PyTorch tensor version API
+                ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             )
             for name, layer in self.layers.items()
             for role in ("to_q", "to_k", "to_v")
@@ -104,7 +104,7 @@ class PackedQkvModel:
             current = self.source.get_parameter(name)
             version = (
                 None if torch.is_inference(current) else current._version
-            )  # noqa: leading-underscore  # PyTorch tensor version API
+            )  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             if (
                 current is not binding.value
                 or current.data_ptr() != binding.pointer

@@ -12,6 +12,7 @@ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
 import sglang_omni.models.firered_tts3.engine_builder as engine_builder_module
+from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
 from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 
@@ -57,7 +58,7 @@ def build_model(
         logits_processor=logits_processor,
         lm_head=torch.nn.Identity(),
     )
-    model.graph_feedback_buffer_value = (
+    model.graph_feedback_buffer = (
         torch.arange(BATCH_SIZE * HIDDEN_SIZE, dtype=torch.bfloat16).reshape(
             BATCH_SIZE, HIDDEN_SIZE
         )
@@ -106,7 +107,7 @@ def test_forward_preserves_feedback_and_text_logits(
         )
         if with_buffer and decode:
             assert torch.equal(
-                output.hidden_states, model.graph_feedback_buffer_value[:BATCH_SIZE]
+                output.hidden_states, model.graph_feedback_buffer[:BATCH_SIZE]
             )
         else:
             assert output.hidden_states is batch.input_embeds
@@ -114,8 +115,21 @@ def test_forward_preserves_feedback_and_text_logits(
         assert output.next_token_logits.shape == (BATCH_SIZE, width)
 
 
-def test_generation_defaults_turn_the_decode_graph_on() -> None:
-    builder = FireRedTTS3EngineBuilder()
+@pytest.fixture
+def engine_builder() -> FireRedTTS3EngineBuilder:
+    pipeline = FireRedTTS3PipelineConfig(model_path="model")
+    return FireRedTTS3EngineBuilder(
+        max_running_requests=pipeline.generation_admission_defaults()[
+            "max_running_requests"
+        ],
+        **pipeline.stage_factory_kwargs("talker"),
+    )
+
+
+def test_generation_defaults_turn_the_decode_graph_on(
+    engine_builder: FireRedTTS3EngineBuilder,
+) -> None:
+    builder = engine_builder
     defaults = builder.generation_defaults(dtype="bfloat16")
     assert defaults["disable_cuda_graph"] is False
     # adjust_overrides runs on the merged dict (defaults + yaml overrides).
@@ -140,6 +154,7 @@ def loadable_model() -> FireRedTTS3SGLangModel:
     model = FireRedTTS3SGLangModel.__new__(FireRedTTS3SGLangModel)
     torch.nn.Module.__init__(model)
     model.backbone = Backbone(2, 2, bias=False)
+    model.weights_locked = False
     for name in ("patch_encoder", "dit", "dit_head", "stop_head"):
         setattr(model, name, torch.nn.Linear(2, 2, bias=False))
     model.spk_proj_llm = model.spk_proj_dit = None
@@ -165,11 +180,12 @@ def test_weight_loading_finishes_before_execution_is_locked(
 @pytest.mark.parametrize("compile_fails", [False, True])
 def test_compile_locks_updates_before_creating_execution(
     loadable_model: FireRedTTS3SGLangModel,
+    engine_builder: FireRedTTS3EngineBuilder,
     monkeypatch: pytest.MonkeyPatch,
     compile_fails: bool,
 ) -> None:
     model = loadable_model
-    builder = FireRedTTS3EngineBuilder(flow_cuda_graph=True)
+    builder = engine_builder
 
     def prepare(
         dit: torch.nn.Module, mode: str
@@ -194,7 +210,13 @@ def test_compile_locks_updates_before_creating_execution(
 def test_disabled_flow_graph_does_not_lock_weight_loading(
     loadable_model: FireRedTTS3SGLangModel,
 ) -> None:
-    builder = FireRedTTS3EngineBuilder(flow_cuda_graph=False)
+    pipeline = FireRedTTS3PipelineConfig(model_path="model")
+    builder = FireRedTTS3EngineBuilder(
+        max_running_requests=pipeline.generation_admission_defaults()[
+            "max_running_requests"
+        ],
+        **{**pipeline.stage_factory_kwargs("talker"), "flow_cuda_graph": False},
+    )
     builder.compile_model(loadable_model, None)
     assert loadable_model.weight_update_blocked_reason is None
     replacement = torch.zeros_like(loadable_model.dit.weight)

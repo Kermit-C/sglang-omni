@@ -1,221 +1,144 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Omni ModelRunner hooks for the FireRedTTS3 fused AR/flow loop.
-
-One engine decode step = one latent patch (4 frames = 160 ms of audio) in
-the prefill form; the dual-stream form (speaker checkpoints, request-level
-opt-in) consumes (nt + na) / na engine steps per patch:
-
-* before_prefill assembles the prefill row (Base: [spk_proj_llm(spk_emb);
-  embed(text_ids); patch_encoder(prompt_latents)]; Instruct/speaker: embed(chatml
-  tokens), Instruct with patch_encoder outputs masked-scattered into the
-  image_pad / video_pad slots) and seeds the per-request noise generator. A
-  request's seed reproduces the reference's global-seed draw order at
-  concurrency 1 (one draw per patch, in patch order); without a seed the
-  draw stream derives from the request id so concurrent requests stay
-  independent.
-* Instruct text-phase requests (voice_design / semantic_edit) run the
-  reference text-AR machine first: prefill tail and text steps sample REAL
-  tokens through the backbone lm_head (the runner leaves next_token_ids
-  alone); sampling <|eot|> (or exhausting the 200-token budget) does NOT
-  terminate the request — the next step feeds embed(eot) without sampling
-  (finalize), then one <|sosp|> feed, and the audio loop's first step feeds
-  <|sosp|> AGAIN (the reference leaves input_embeds stale across the loop
-  boundary — the doubled feed is its actual behavior, replicated).
-* Dual-stream requests (speaker variant, dual_stream=True) run the
-  reference's streaming machine: the prompt ends at <|audio_start|>; per
-  (nt, na) group the machine feeds nt text tokens (the char-modelled stream,
-  <|text_pad|> once exhausted) then na patch embeddings; the group's last
-  text feed (and each intermediate patch feed) appends the cond and fires
-  the flow, while the last patch feed only runs the stop check — the
-  reference predicts stop AFTER the patch enters the backbone, so a stopping
-  step HAS already emitted its patch (the prefill form checks before
-  generating and a stopping step emits nothing).
-* post_prefill / post_decode run the reference side path in fp32: stop_head
-  sigmoid -> cond window (first step: the full prompt-latent span's hidden
-  rows; later steps: the last row, sliding window of num_history_patches +
-  1) -> dit_head -> DiT n_timesteps Euler (CFG doubles the batch with a
-  zeroed cond twin; only the last patch frames update) -> patch_encoder
-  feedback queued for the next step. With flow_batching on, each hook first
-  collects the step's per-request flow rows (stop/cond/noise stay
-  per-request; a stopping row is never collected) and then runs ONE batched
-  DiT + PatchEncoder pass, writing back in collection order — the DiT loop
-  is launch-bound, so a B-row replay costs barely more than one row.
-* before_decode moves the queued feedback into forward_batch.input_embeds
-  for patch-feed rows (or the model-owned persistent buffer when the decode
-  CUDA graph is on); text feeds ride the engine's token rail (the runner
-  writes the feed token into next_token_ids the step before).
-* Retraction keeps the RNG state (FireRedFlowResume) plus the text machine
-  on the request data; the re-prefill rebuilds the flow state from the full
-  hidden row and replays the decoded patches through patch_encoder (for
-  dual-stream, the interleaved text/patch feed order recorded in
-  output_ids). The re-prefill tail is the interrupted step's input; both
-  machines resume its post-work on that hidden. Prefill stop decisions
-  defer to the next decode step so the scheduler releases KV normally.
-  Repeated retractions while that stop is pending replay the excess CONTROL
-  feeds as discardable token embeddings; no more machine post-work runs.
-  Async decode with retraction remains unverified.
-"""
+"""FireRedTTS3 autoregressive hooks and per-request flow execution."""
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
+from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN, ScheduleBatch
+from sglang.srt.managers.utils import GenerationBatchResult
+from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardBatch
 
 from sglang_omni.model_runner.base import ModelRunner
+from sglang_omni.model_runner.model_worker import ModelWorker
 from sglang_omni.models.firered_tts3.flow_graph import (
     FlowGraphRunner,
     euler_flow_loop,
     flow_t_span,
 )
+from sglang_omni.models.firered_tts3.prefill import (
+    audio_hidden_row_offset,
+    build_base_prefill_embeds,
+    build_chatml_prefill_embeds,
+    build_replay_rows,
+    dual_stream_conditioning_rows,
+    text_output_token_count,
+)
 from sglang_omni.models.firered_tts3.profiling import ProfilingProbe
 from sglang_omni.models.firered_tts3.prompt_utils import (
     AUDIO_SOS_ID,
-    LATENT_IN_PAD_ID,
-    LATENT_OUT_PAD_ID,
     TEXT_EOT_ID,
     TEXT_TOKEN_BUDGET,
 )
 from sglang_omni.models.firered_tts3.request_builders import (
     CONTROL_TOKEN_ID,
+    DS_STAGE_PATCH,
+    DS_STAGE_TEXT,
+    TEXT_MODE_AUDIO,
+    TEXT_MODE_AUDIO_ZERO,
+    TEXT_MODE_FINALIZE,
+    TEXT_MODE_SOSP,
+    TEXT_MODE_TEXT,
     FireRedFlowResume,
     FireRedTTS3SGLangRequestData,
+    FlowState,
 )
+from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 from sglang_omni.sampling.seed import derive_sampling_seed
+from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.types import SchedulerRequest
 
-# Text-AR machine stages (the reference's generate() mapped onto engine
-# steps): TEXT samples; FINALIZE feeds embed(eot-or-last-token) without
-# sampling; SOSP feeds embed(sosp); AUDIO_ZERO is the audio loop's step 0
-# (the doubled sosp feed whose hidden drives the first stop check + patch);
-# AUDIO is the steady fused loop.
-TEXT_MODE_TEXT = "text"
-TEXT_MODE_FINALIZE = "finalize"
-TEXT_MODE_SOSP = "sosp"
-TEXT_MODE_AUDIO_ZERO = "audio_zero"
-TEXT_MODE_AUDIO = "audio"
 
-# Dual-stream machine stages (speaker variant): per (nt, na) group, nt text
-# feeds then na patch feeds. The group's LAST text feed (and every
-# intermediate patch feed) drives a flow step; the LAST patch feed only runs
-# the stop check (the reference predicts stop AFTER the patch enters the
-# backbone, so a stopping step has already emitted its patch).
-DS_STAGE_TEXT = "text"
-DS_STAGE_PATCH = "patch"
+@dataclass(kw_only=True)
+class FlowRow:
+    """One request's inputs to a batched Euler integration."""
+
+    request_data: FireRedTTS3SGLangRequestData
+    history_latents: torch.Tensor
+    initial_noise: torch.Tensor
+    conditioning: torch.Tensor
 
 
-class FlowState:
-    """Per-request fused-loop state (fp32; rebuilt from scratch on re-prefill)."""
+# note (kermit): Unused hook arguments are required by the shared ModelRunner interface.
+class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
+    """Own flow execution and request lifecycle through the shared runner hooks."""
+
+    model: FireRedTTS3SGLangModel
+    tp_worker: ModelWorker
+    output_processor: SGLangOutputProcessor
 
     def __init__(
         self,
-        *,
-        generator: torch.Generator,
-        prompt_patch_count: int,
-        spk_cond_dit: torch.Tensor | None,
-        backbone_cond: torch.Tensor,
-        latents_gen: torch.Tensor,
-        patch_count: int,
-    ) -> None:
-        self.generator = generator
-        self.prompt_patch_count = prompt_patch_count
-        self.spk_cond_dit = spk_cond_dit
-        self.backbone_cond = backbone_cond
-        self.latents_gen = latents_gen
-        self.patch_count = patch_count
-
-
-# One collected flow row: (request data, history latents, noise, DiT cond).
-# The DiT Euler loop is kernel-launch bound, so the per-engine-step rows of
-# concurrent requests are cat'ed into one batched replay (bucket zero-pad as
-# needed) instead of replaying once per request.
-FlowRow = tuple[FireRedTTS3SGLangRequestData, torch.Tensor, torch.Tensor, torch.Tensor]
-
-
-class FireRedTTS3ModelRunner(ModelRunner):
-    """Use the shared SGLang forward path and own only the flow side path."""
-
-    # note: class-level defaults so tests building the runner via __new__
-    # resolve the flow-graph probe to disabled and the flow path to serial.
-    flow_graphs: FlowGraphRunner | None = None
-    flow_batching: bool = False
-    control_token_fastpath: bool = True
-    skip_min_patch_stop: bool = True
-    prefill_launch_at: float | None = None
-
-    def __init__(
-        self,
-        tp_worker,
-        output_processor,
+        tp_worker: ModelWorker,
+        output_processor: SGLangOutputProcessor,
         *,
         flow_graphs: FlowGraphRunner | None = None,
-        flow_batching: bool = False,
-        control_token_fastpath: bool = True,
-        skip_min_patch_stop: bool = True,
+        flow_batching: bool,
+        control_token_fastpath: bool,
+        skip_min_patch_stop: bool,
     ) -> None:
         super().__init__(tp_worker, output_processor)
         self.active_requests: dict[str, FireRedTTS3SGLangRequestData] = {}
         self.t_span_cache: dict[int, torch.Tensor] = {}
-        # Host timestamp at the end of before_prefill; post_prefill turns it
-        # into the engine_prefill segment (the prefill forward's wall time).
         self.prefill_launch_at: float | None = None
-        if flow_graphs is not None:
-            self.flow_graphs = flow_graphs
-        else:
-            pass
-        self.flow_batching = flow_batching
-        self.control_token_fastpath = control_token_fastpath
-        self.skip_min_patch_stop = skip_min_patch_stop
+        self.flow_graphs: FlowGraphRunner | None = flow_graphs
+        self.flow_batching: bool = flow_batching
+        self.control_token_fastpath: bool = control_token_fastpath
+        self.skip_min_patch_stop: bool = skip_min_patch_stop
 
     def t_span(self, n_timesteps: int, device: torch.device) -> torch.Tensor:
-        span = self.t_span_cache.get(n_timesteps)
-        if span is None or span.device != device:
-            span = flow_t_span(n_timesteps, device)
-            self.t_span_cache[n_timesteps] = span
+        """Cache the fp32 Euler timestep schedule on the execution device."""
+        timestep_schedule = self.t_span_cache.get(n_timesteps)
+        if timestep_schedule is None or timestep_schedule.device != device:
+            timestep_schedule = flow_t_span(n_timesteps, device)
+            self.t_span_cache[n_timesteps] = timestep_schedule
         else:
             pass
-        return span
+        return timestep_schedule
 
-    def before_prefill(self, forward_batch, schedule_batch, requests: list) -> None:
-        del schedule_batch
+    def before_prefill(
+        self,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
+    ) -> None:
+        """Materialize prompt and replay embeddings with per-request flow state."""
         if not requests:
             return
         else:
             pass
+        assert forward_batch is not None
         self.release_retracted_flow_states()
         model = self.model
         device = forward_batch.input_ids.device
-        embed_dtype = next(model.parameters()).dtype
+        embedding_dtype = next(model.parameters()).dtype
         model.text_logits_requested = any(
-            request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests
+            (request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests)
         )
-        rows = []
-        materialized = []
+        embedding_rows = []
+        materialized_requests = []
         try:
             for request in requests:
-                data = request.data
-                if data.flow_state is not None and not isinstance(
-                    data.flow_state, FireRedFlowResume
+                request_data = request.data
+                if request_data.flow_state is not None and (
+                    not isinstance(request_data.flow_state, FireRedFlowResume)
                 ):
-                    self.suspend_request_data(data)
+                    self.suspend_request_data(request_data)
                 else:
                     pass
                 self.active_requests.pop(request.request_id, None)
-                resume = data.flow_state
-                state = data.state
+                resume = request_data.flow_state
+                state = request_data.state
                 if state.variant == "speaker":
-                    # The speaker token carries the voice; speaker requests
-                    # must not carry reference-conditioning tensors.
                     if (
                         state.prompt_latents is not None
                         or state.speaker_embedding is not None
                     ):
                         raise RuntimeError(
-                            "FireRedTTS3 speaker-variant requests carry no "
-                            "reference-conditioning tensors (prompt_latents / "
-                            "speaker_embedding)"
+                            "FireRedTTS3 speaker-variant requests carry no reference-conditioning tensors (prompt_latents / speaker_embedding)"
                         )
                     else:
                         pass
@@ -223,8 +146,7 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     state.prompt_latents is None or state.speaker_embedding is None
                 ):
                     raise RuntimeError(
-                        "FireRedTTS3 request is missing its reference-conditioning "
-                        "tensors (prompt_latents / speaker_embedding)"
+                        "FireRedTTS3 request is missing its reference-conditioning tensors (prompt_latents / speaker_embedding)"
                     )
                 else:
                     pass
@@ -233,7 +155,7 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     if state.prompt_latents is not None
                     else None
                 )
-                spk_emb = (
+                speaker_embedding = (
                     state.speaker_embedding.to(device=device, dtype=torch.float32)
                     if state.speaker_embedding is not None
                     else None
@@ -251,321 +173,145 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         derive_sampling_seed("fireredtts3-flow", request.request_id)
                     )
                 if prompt_latents is not None:
-                    latents_gen = F.pad(prompt_latents, (0, 0, model.history_length, 0))
+                    latent_history = F.pad(
+                        prompt_latents, (0, 0, model.history_length, 0)
+                    )
                 else:
-                    latents_gen = torch.zeros(
+                    latent_history = torch.zeros(
                         1, model.history_length, model.redae_dim, device=device
                     )
-                if data.latent_patches:
-                    latents_gen = torch.cat([latents_gen, *data.latent_patches], dim=1)
+                if request_data.latent_patches:
+                    latent_history = torch.cat(
+                        [latent_history, *request_data.latent_patches], dim=1
+                    )
                 else:
                     pass
-                data.flow_state = FlowState(
+                request_data.flow_state = FlowState(
                     generator=generator,
-                    prompt_patch_count=data.prompt_patch_count,
-                    spk_cond_dit=(
-                        model.spk_proj_dit(spk_emb)
+                    prompt_patch_count=request_data.prompt_patch_count,
+                    speaker_conditioning=(
+                        model.spk_proj_dit(speaker_embedding)
                         if model.spk_proj_dit is not None
                         else None
                     ),
-                    backbone_cond=torch.zeros(
-                        1,
-                        model.history_patches,
-                        model.llm_hidden_size,
-                        device=device,
+                    backbone_conditioning=torch.zeros(
+                        1, model.history_patches, model.llm_hidden_size, device=device
                     ),
-                    latents_gen=latents_gen,
-                    patch_count=len(data.latent_patches),
+                    latent_history=latent_history,
+                    patch_count=len(request_data.latent_patches),
                 )
-                data.probe = ProfilingProbe.create()
-                self.active_requests[request.request_id] = data
-                materialized.append((request.request_id, data))
-
-                with torch.inference_mode(), data.probe.segment("prefill_embeds"):
+                request_data.probe = ProfilingProbe.create()
+                self.active_requests[request.request_id] = request_data
+                materialized_requests.append((request.request_id, request_data))
+                with (
+                    torch.inference_mode(),
+                    request_data.probe.segment("prefill_embeds"),
+                ):
                     if state.variant == "base":
-                        prompt_embeds = self.build_base_prefill_embeds(
-                            model, state, prompt_latents, spk_emb, device
+                        prompt_embeddings = build_base_prefill_embeds(
+                            model, state, prompt_latents, speaker_embedding, device
                         )
                     else:
-                        # Instruct / speaker: real chatml token rows (speaker
-                        # text ids were scattered into the holder slots at
-                        # preprocessing; Instruct audio latents scatter here).
-                        prompt_embeds = self.build_chatml_prefill_embeds(
+                        prompt_embeddings = build_chatml_prefill_embeds(
                             model, state, device
                         )
-                    if prompt_embeds.shape[1] != data.prefill_len:
+                    if prompt_embeddings.shape[1] != request_data.prefill_len:
                         raise RuntimeError(
-                            f"FireRedTTS3 prefill row is {prompt_embeds.shape[1]} "
-                            f"positions, expected {data.prefill_len}"
+                            f"FireRedTTS3 prefill row is {prompt_embeddings.shape[1]} positions, expected {request_data.prefill_len}"
                         )
                     else:
                         pass
-                    request_rows = [prompt_embeds[0].to(embed_dtype)]
-                    replay_rows = self.build_replay_rows(
-                        model, data, device, embed_dtype
+                    request_embeddings = [prompt_embeddings[0].to(embedding_dtype)]
+                    replay_embeddings = build_replay_rows(
+                        model, request_data, device, embedding_dtype
                     )
-                    if replay_rows is not None:
-                        request_rows.append(replay_rows)
+                    if replay_embeddings is not None:
+                        request_embeddings.append(replay_embeddings)
                     else:
                         pass
-                prefix_len = len(data.req.prefix_indices)
-                req_len = int(data.req.extend_range.length)
-                generated = req_len - data.prefill_len
-                assert prefix_len == 0, "FireRedTTS3 radix prefix reuse is disabled"
-                if data.dual_stream:
-                    # output_ids record the interleaved feeds: text tokens as
-                    # themselves, patch feeds as the control token, including
-                    # the pending feed. Every flow-firing step returns one
-                    # control token and appends one patch. While a deferred
-                    # stop is pending, each re-prefill returns another control
-                    # token without a patch; the stopped machine emits nothing.
+                prefix_token_count = len(request_data.req.prefix_indices)
+                request_token_count = int(request_data.req.extend_range.length)
+                generated_token_count = request_token_count - request_data.prefill_len
+                assert (
+                    prefix_token_count == 0
+                ), "FireRedTTS3 radix prefix reuse is disabled"
+                if request_data.dual_stream:
                     patch_feeds = sum(
-                        1
-                        for token in data.req.output_ids
-                        if int(token) == CONTROL_TOKEN_ID
+                        (
+                            1
+                            for token_id in request_data.req.output_ids
+                            if int(token_id) == CONTROL_TOKEN_ID
+                        )
                     )
-                    excess = patch_feeds - len(data.latent_patches)
+                    excess = patch_feeds - len(request_data.latent_patches)
                     assert (
-                        generated == len(data.req.output_ids)
+                        generated_token_count == len(request_data.req.output_ids)
                         and excess >= 0
-                        and (excess == 0 or data.stop_pending)
+                        and (excess == 0 or request_data.stop_pending)
                     ), "FireRedTTS3 dual-stream re-prefill history is inconsistent"
                 else:
                     excess = (
-                        len(data.req.output_ids)
-                        - self.text_output_tokens(data)
-                        - len(data.latent_patches)
+                        len(request_data.req.output_ids)
+                        - text_output_token_count(request_data)
+                        - len(request_data.latent_patches)
                     )
-                    assert generated == len(data.req.output_ids) and (
-                        excess >= 0 and (excess == 0 or data.stop_pending)
+                    assert generated_token_count == len(
+                        request_data.req.output_ids
+                    ) and (
+                        excess >= 0 and (excess == 0 or request_data.stop_pending)
                     ), "FireRedTTS3 re-prefill history must match generated tokens"
-                rows.append(torch.cat(request_rows, dim=0))
-            forward_batch.input_embeds = torch.cat(rows, dim=0)
-            if any(data.probe.enabled for _rid, data in materialized):
+                embedding_rows.append(torch.cat(request_embeddings, dim=0))
+            forward_batch.input_embeds = torch.cat(embedding_rows, dim=0)
+            if any(
+                (
+                    request_data.probe.enabled
+                    for request_id, request_data in materialized_requests
+                )
+            ):
                 self.prefill_launch_at = time.perf_counter()
             else:
                 pass
         except BaseException:
-            for request_id, data in materialized:
+            for request_id, request_data in materialized_requests:
                 self.active_requests.pop(request_id, None)
-                self.clear_request_data(data)
+                self.clear_request_data(request_data)
             raise
 
-    def build_base_prefill_embeds(
-        self, model, state, prompt_latents, spk_emb, device
-    ) -> torch.Tensor:
-        """Base ICL row: [spk_proj_llm(spk_emb); embed(text); pe(prompt)]."""
-        text_ids = torch.tensor(
-            state.input_ids, dtype=torch.long, device=device
-        ).unsqueeze(0)
-        return torch.cat(
-            [
-                model.spk_proj_llm(spk_emb).unsqueeze(1),
-                model.get_input_embeddings()(text_ids).to(torch.float32),
-                model.patch_encoder(prompt_latents),
-            ],
-            dim=1,
-        )
-
-    def build_chatml_prefill_embeds(self, model, state, device) -> torch.Tensor:
-        """Instruct / speaker row: embed(chatml tokens) with patch_encoder
-        outputs masked-scattered into the image_pad (edit source, first —
-        reference order) and video_pad (ICL prompt) slots. Speaker prompts
-        carry no latent slots, so the row is the plain token embedding."""
-        text_ids = torch.tensor(
-            state.input_ids, dtype=torch.long, device=device
-        ).unsqueeze(0)
-        embeds = model.get_input_embeddings()(text_ids)  # [1, T, H] bf16
-        for latents, pad_id, what in (
-            (state.audio_in_latents, LATENT_IN_PAD_ID, "audio input"),
-            (state.prompt_latents, LATENT_OUT_PAD_ID, "ICL audio"),
-        ):
-            if latents is None:
-                continue
-            else:
-                pass
-            patch_embeds = model.patch_encoder(
-                latents.to(device=device, dtype=torch.float32)
-            )
-            mask = text_ids == pad_id
-            slots = int(mask.sum())
-            if slots != int(patch_embeds.shape[1]):
-                raise RuntimeError(
-                    f"FireRedTTS3 {what} slot mismatch: the prompt carries "
-                    f"{slots} placeholder tokens but the audio encodes to "
-                    f"{int(patch_embeds.shape[1])} patches"
-                )
-            else:
-                pass
-            embeds = embeds.masked_scatter(
-                mask.unsqueeze(-1),
-                patch_embeds.reshape(-1).to(embeds.dtype),
-            )
-        return embeds.to(torch.float32)
-
-    def build_replay_rows(
-        self, model, data: FireRedTTS3SGLangRequestData, device, embed_dtype
-    ) -> torch.Tensor | None:
-        """Re-prefill replay rows for the already-generated region: text /
-        sosp tokens embed through the token table, audio patches through
-        patch_encoder (one row per engine step). Dual-stream requests replay
-        the interleaved feed order recorded in output_ids (a CONTROL row
-        consumes the next generated patch); when the machine paused at a
-        patch feed, that patch's embedding re-queues as the next feedback.
-        Sync CONTROL entries match latent_patches 1:1 until a deferred stop;
-        later CONTROL feeds replay as discardable token embeddings. Re-queuing
-        is only a fallback for async output_ids lagging one token behind."""
-        if data.dual_stream:
-            return self.build_dual_stream_replay_rows(model, data, device, embed_dtype)
-        else:
-            pass
-        text_tokens = self.text_output_tokens(data)
-        rows = []
-        if text_tokens:
-            ids = torch.tensor(
-                data.req.output_ids[:text_tokens], dtype=torch.long, device=device
-            )
-            rows.append(model.get_input_embeddings()(ids).to(embed_dtype))
-        else:
-            pass
-        if data.latent_patches:
-            rows.append(
-                model.patch_encoder(torch.cat(data.latent_patches, dim=1))[0].to(
-                    embed_dtype
-                )
-            )
-        else:
-            pass
-        excess = len(data.req.output_ids) - text_tokens - len(data.latent_patches)
-        if data.stop_pending and excess > 0:
-            # A deferred stop's extra feeds have no patches; their hidden
-            # rows are discarded by post_prefill and the finishing decode.
-            ids = torch.full(
-                (excess,), CONTROL_TOKEN_ID, dtype=torch.long, device=device
-            )
-            rows.append(model.get_input_embeddings()(ids).to(embed_dtype))
-        else:
-            pass
-        if not rows:
-            return None
-        else:
-            pass
-        return torch.cat(rows, dim=0)
-
-    def build_dual_stream_replay_rows(
-        self, model, data: FireRedTTS3SGLangRequestData, device, embed_dtype
-    ) -> torch.Tensor | None:
-        output_ids = [int(token) for token in data.req.output_ids]
-        if not output_ids:
-            return None
-        else:
-            pass
-        embed_tokens = model.get_input_embeddings()
-        rows: list[torch.Tensor] = []
-        text_buffer: list[int] = []
-        patch_cursor = 0
-
-        def flush_text() -> None:
-            if text_buffer:
-                ids = torch.tensor(text_buffer, dtype=torch.long, device=device)
-                rows.append(embed_tokens(ids).to(embed_dtype))
-                text_buffer.clear()
-            else:
-                pass
-
-        for token in output_ids:
-            if token == CONTROL_TOKEN_ID:
-                flush_text()
-                if data.stop_pending and patch_cursor == len(data.latent_patches):
-                    # Stopped requests may accumulate CONTROL feeds across
-                    # retractions; these rows never drive flow or feedback.
-                    ids = torch.tensor(
-                        [CONTROL_TOKEN_ID], dtype=torch.long, device=device
-                    )
-                    rows.append(embed_tokens(ids).to(embed_dtype))
-                else:
-                    assert patch_cursor < len(data.latent_patches), (
-                        "FireRedTTS3 dual-stream replay found more patch feeds "
-                        "than generated patches"
-                    )
-                    rows.append(
-                        model.patch_encoder(data.latent_patches[patch_cursor])[0].to(
-                            embed_dtype
-                        )
-                    )
-                    patch_cursor += 1
-            else:
-                text_buffer.append(token)
-        flush_text()
-        # A patch whose flow already fired but whose feed was interrupted by
-        # the retraction: its embedding is the next decode step's input.
-        pending = len(data.latent_patches) - patch_cursor
-        assert pending in (0, 1), (
-            "FireRedTTS3 dual-stream replay must leave at most one fed-back "
-            f"patch pending, got {pending}"
-        )
-        if pending:
-            assert data.ds_stage == DS_STAGE_PATCH, (
-                "FireRedTTS3 dual-stream replay expects the machine at a patch "
-                f"feed when a patch is pending, got {data.ds_stage!r}"
-            )
-            data.pending_feedback_queue.append(
-                model.patch_encoder(data.latent_patches[-1])[0, 0].to(dtype=embed_dtype)
-            )
-        else:
-            pass
-        return torch.cat(rows, dim=0)
-
-    @staticmethod
-    def text_output_tokens(data: FireRedTTS3SGLangRequestData) -> int:
-        """Generated output_ids consumed by the text machine: the recorded
-        text tokens (+ the EOT feed) and the finalize/sosp transition rows."""
-        if not data.text_token_ids and not data.eot_sampled:
-            # Never ran a text phase (Base, Instruct tts/acoustic_edit, or a
-            # text request retracted before its first sample).
-            return 0
-        else:
-            pass
-        n_text = len(data.text_token_ids) + int(data.eot_sampled)
-        if data.text_ar_mode in (TEXT_MODE_AUDIO_ZERO, TEXT_MODE_AUDIO):
-            n_text += 2
-        elif data.text_ar_mode == TEXT_MODE_SOSP:
-            n_text += 1
-        else:
-            pass
-        return n_text
-
     def before_decode(
-        self, forward_batch, schedule_batch, requests: list, *, is_lookahead=False
+        self,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
+        *,
+        is_lookahead: bool = False,
     ) -> None:
-        del schedule_batch, is_lookahead
+        """Stage feedback and text embeddings in the upcoming batch row order."""
         if not requests:
             return
         else:
             pass
+        assert forward_batch is not None
         model = self.model
         model.text_logits_requested = any(
-            request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests
+            (request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests)
         )
-        rows = []
-        for row, request in enumerate(requests):
-            data = request.data
-            # Patch-embedding feeds: the fused loop's steady state (AUDIO)
-            # pops the queued PatchEncoder feedback; the dual-stream machine
-            # pops it on its patch feeds.
+        embedding_rows = []
+        for request_row_index, request in enumerate(requests):
+            request_data = request.data
             feed_is_patch = (
-                not data.dual_stream and data.text_ar_mode == TEXT_MODE_AUDIO
-            ) or (data.dual_stream and data.ds_stage == DS_STAGE_PATCH)
+                not request_data.dual_stream
+                and request_data.text_ar_mode == TEXT_MODE_AUDIO
+                or (
+                    request_data.dual_stream and request_data.ds_stage == DS_STAGE_PATCH
+                )
+            )
             if feed_is_patch:
-                queue = data.pending_feedback_queue
-                if queue:
-                    rows.append(queue.popleft())
-                elif data.stop_pending:
-                    # A deferred stop queued no feedback. The next post hook
-                    # discards this row (sync) or leaves it to resolve
-                    # (async), so any in-shape embedding satisfies the
-                    # engine's contract.
-                    rows.append(
+                feedback_queue = request_data.pending_feedback_queue
+                if feedback_queue:
+                    embedding_rows.append(feedback_queue.popleft())
+                elif request_data.stop_pending:
+                    # note (kermit): Deferred stop discards this feed; decode still owns KV cleanup.
+                    embedding_rows.append(
                         torch.zeros(
                             model.llm_hidden_size,
                             device=forward_batch.input_ids.device,
@@ -577,11 +323,8 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         "FireRedTTS3 decode is missing its latent feedback"
                     )
             else:
-                # Text / finalize / sosp feeds: embed the engine's incoming
-                # token (the sampled text token, EOT, the sosp overwrite, or
-                # the dual-stream text feed placed by the previous step).
-                token_id = int(forward_batch.input_ids[row])
-                rows.append(
+                token_id = int(forward_batch.input_ids[request_row_index])
+                embedding_rows.append(
                     model.get_input_embeddings()(
                         torch.tensor(
                             [token_id],
@@ -590,31 +333,26 @@ class FireRedTTS3ModelRunner(ModelRunner):
                         )
                     )[0]
                 )
-        buffer = model.graph_feedback_buffer
-        if buffer is not None:
-            # stack writes in forward-batch row order on the same stream as the
-            # graph or eager forward; forward() reads this buffer directly.
-            torch.stack(rows, out=buffer[: len(rows)])
+        feedback_buffer = model.graph_feedback_buffer
+        if feedback_buffer is not None:
+            # note (kermit): Decode graphs read this persistent buffer rather than input_embeds.
+            torch.stack(embedding_rows, out=feedback_buffer[: len(embedding_rows)])
         else:
-            forward_batch.input_embeds = torch.stack(rows).to(
+            forward_batch.input_embeds = torch.stack(embedding_rows).to(
                 device=forward_batch.input_ids.device,
                 dtype=next(model.parameters()).dtype,
             )
 
-    def requested_capture_hidden_mode_prefill(self, schedule_batch, requests: list):
-        del schedule_batch, requests
-        from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
-
+    def requested_capture_hidden_mode_prefill(
+        self, schedule_batch: ScheduleBatch | None, requests: list[SchedulerRequest]
+    ) -> CaptureHiddenMode:
+        """Preserve all prompt hidden rows for flow history reconstruction."""
         return CaptureHiddenMode.FULL
 
-    def requested_capture_hidden_mode_decode(self, schedule_batch, requests: list):
-        del schedule_batch, requests
-        from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
-
-        # Decode runs one position per request, so FULL and LAST return the
-        # same rows; the decode CUDA graph is captured with FULL
-        # (enable_return_hidden_states) and load_batch rejects a batch asking
-        # for more than the captured mode, so request FULL when the graph is on.
+    def requested_capture_hidden_mode_decode(
+        self, schedule_batch: ScheduleBatch | None, requests: list[SchedulerRequest]
+    ) -> CaptureHiddenMode:
+        """Match the FULL mode baked into a feedback-buffer decode graph."""
         if self.model.graph_feedback_buffer is not None:
             return CaptureHiddenMode.FULL
         else:
@@ -622,24 +360,34 @@ class FireRedTTS3ModelRunner(ModelRunner):
         return CaptureHiddenMode.LAST
 
     def sample_before_post_prefill(
-        self, forward_batch, schedule_batch, requests: list
+        self,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
     ) -> bool:
-        del forward_batch, schedule_batch
-        # Text-phase rows must be really sampled (lm_head logits) before the
-        # post hook runs, so the machine can read the sampled token.
-        return any(request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests)
+        return any(
+            (request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests)
+        )
 
     def sample_before_post_decode(
-        self, forward_batch, schedule_batch, requests: list
+        self,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
     ) -> bool:
-        del forward_batch, schedule_batch
-        return any(request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests)
+        return any(
+            (request.data.text_ar_mode == TEXT_MODE_TEXT for request in requests)
+        )
 
     def post_prefill(
-        self, result, forward_batch, schedule_batch, requests: list
+        self,
+        result: GenerationBatchResult,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
     ) -> None:
-        del forward_batch
-        if bool(getattr(schedule_batch, "is_prefill_only", False)):
+        """Resume prefill tails while deferring finish until decode owns KV cleanup."""
+        if schedule_batch is not None and schedule_batch.is_prefill_only:
             return
         else:
             pass
@@ -648,10 +396,6 @@ class FireRedTTS3ModelRunner(ModelRunner):
         else:
             pass
         if self.prefill_launch_at is not None:
-            # The wall between the before_prefill handoff and this hook is the
-            # engine's prefill forward (plus in-engine bookkeeping); one
-            # forward serves the whole extend batch, so every request's probe
-            # accumulates the same span.
             engine_prefill = time.perf_counter() - self.prefill_launch_at
             self.prefill_launch_at = None
             for request in requests:
@@ -662,63 +406,58 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     pass
         else:
             pass
-        hidden = self.hidden_states(result)
-        if hidden.ndim == 3:
-            hidden = hidden.reshape(-1, hidden.shape[-1])
-        elif hidden.ndim != 2:
+        hidden_states = self.hidden_states(result)
+        if hidden_states.ndim == 3:
+            hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
+        elif hidden_states.ndim != 2:
             raise RuntimeError(
-                f"FireRedTTS3 expected rank-2/3 prefill hidden, got {hidden.ndim}"
+                f"FireRedTTS3 expected rank-2/3 prefill hidden, got {hidden_states.ndim}"
             )
         else:
             pass
-        offset = 0
+        hidden_row_offset = 0
         next_token_ids = []
         flow_rows: list[FlowRow] | None = [] if self.flow_batching else None
-        for row, request in enumerate(requests):
-            data = request.data
-            length = int(data.req.extend_range.length)
-            request_hidden = hidden[offset : offset + length]
-            if request_hidden.size(0) != length:
+        for request_row_index, request in enumerate(requests):
+            request_data = request.data
+            request_token_count = int(request_data.req.extend_range.length)
+            request_hidden = hidden_states[
+                hidden_row_offset : hidden_row_offset + request_token_count
+            ]
+            if request_hidden.size(0) != request_token_count:
                 raise RuntimeError("FireRedTTS3 prefill hidden rows are incomplete")
             else:
                 pass
-            offset += length
-            hidden_f32 = request_hidden.to(torch.float32)
-            if data.stop_pending:
-                # A previously deferred stop leaves no machine post-work.
-                # Each re-prefill returns an extra CONTROL without a patch;
-                # the next decode resolves the finish and discards its row.
+            hidden_row_offset += request_token_count
+            hidden_states_float32 = request_hidden.to(torch.float32)
+            if request_data.stop_pending:
                 next_token_ids.append(CONTROL_TOKEN_ID)
                 continue
             else:
                 pass
-            flow = data.flow_state
-            if data.text_ar_mode == TEXT_MODE_TEXT:
-                # The prefill tail is the reference's first text sampling
-                # (its loop iter 0); no flow side path yet.
-                next_token_ids.append(
-                    self.record_text_sample(data, result.next_token_ids[row])
-                )
+            flow = request_data.flow_state
+            assert isinstance(flow, FlowState)
+            text_feed_token_id = self.advance_text_phase(
+                request_data, result, request_row_index
+            )
+            if text_feed_token_id is not None:
+                next_token_ids.append(text_feed_token_id)
                 continue
             else:
                 pass
-            if data.dual_stream:
-                if not data.req.output_ids:
-                    # First prefill: the machine starts on the next decode
-                    # step's text feed; the prompt tail fires nothing
-                    # (generate_streaming_noicl leaves the prefix unused).
-                    next_token_ids.append(self.next_text_feed(data))
+            if request_data.dual_stream:
+                if not request_data.req.output_ids:
+                    next_token_ids.append(self.next_text_feed(request_data))
                     continue
                 else:
                     pass
-                # The re-prefill tail is the interrupted step's input. Rebuild
-                # the earlier cond rows before resuming its post-work; a flow
-                # step appends the tail itself.
                 if flow.patch_count > 0:
-                    flow.backbone_cond = torch.cat(
+                    flow.backbone_conditioning = torch.cat(
                         [
-                            flow.backbone_cond,
-                            self.dual_stream_cond_rows(data, hidden_f32),
+                            flow.backbone_conditioning,
+                            dual_stream_conditioning_rows(
+                                request_data, hidden_states_float32
+                            ),
                         ],
                         dim=1,
                     )
@@ -726,73 +465,49 @@ class FireRedTTS3ModelRunner(ModelRunner):
                     pass
                 next_token_ids.append(
                     self.dual_stream_step(
-                        data, hidden_f32[-1:], flow_rows, defer_stop=True
+                        request_data,
+                        hidden_states_float32[-1:],
+                        flow_rows,
+                        defer_stop=True,
                     )
                 )
                 continue
             else:
                 pass
-            mode = data.text_ar_mode
-            if mode == TEXT_MODE_FINALIZE:
-                # The interrupted finalize fed embed(EOT/last-token) without
-                # sampling; resume the same transition as run_post_decode.
-                data.text_ar_mode = TEXT_MODE_SOSP
-                next_token_ids.append(AUDIO_SOS_ID)
-                continue
-            else:
-                pass
-            if mode == TEXT_MODE_SOSP:
-                data.text_ar_mode = TEXT_MODE_AUDIO_ZERO
-                next_token_ids.append(AUDIO_SOS_ID)
-                continue
-            else:
-                pass
-            if mode == TEXT_MODE_AUDIO_ZERO:
-                data.text_ar_mode = TEXT_MODE_AUDIO
-            else:
-                pass
             if flow.patch_count > 0:
-                # Re-prefill after retraction: rebuild the cond history from
-                # the full hidden row — the prompt-latent span, then one row
-                # per completed patch-driving step — before this step's own
-                # append. Text-machine requests interleave the text/sosp
-                # region before the patch rows (audio_zero drives patch 0).
-                span_start = data.prefill_len - flow.prompt_patch_count
-                audio_start = data.prefill_len + self.audio_hidden_offset(data)
-                rebuilt = [
-                    flow.backbone_cond,
-                    hidden_f32[span_start : data.prefill_len].unsqueeze(0),
-                    hidden_f32[audio_start:-1].unsqueeze(0),
+                prompt_hidden_start = request_data.prefill_len - flow.prompt_patch_count
+                audio_hidden_start = request_data.prefill_len + audio_hidden_row_offset(
+                    request_data
+                )
+                conditioning_parts = [
+                    flow.backbone_conditioning,
+                    hidden_states_float32[
+                        prompt_hidden_start : request_data.prefill_len
+                    ].unsqueeze(0),
+                    hidden_states_float32[audio_hidden_start:-1].unsqueeze(0),
                 ]
-                flow.backbone_cond = torch.cat(rebuilt, dim=1)
+                flow.backbone_conditioning = torch.cat(conditioning_parts, dim=1)
             else:
                 pass
-            # Prefill skips already-finished requests before KV cleanup;
-            # resolve a stop on the next decode step instead.
-            self.flow_step(data, hidden_f32, flow_rows, defer_stop=True)
+            self.flow_step(
+                request_data, hidden_states_float32, flow_rows, defer_stop=True
+            )
             next_token_ids.append(CONTROL_TOKEN_ID)
-        if flow_rows:
-            self.run_flow_rows(flow_rows)
-        else:
-            pass
-        if offset != hidden.size(0):
-            raise RuntimeError("FireRedTTS3 prefill hidden rows do not match requests")
-        else:
-            pass
-        result.next_token_ids, host_token_ids = self.make_next_token_ids(
-            next_token_ids, hidden.device, requests
+        self.finish_step(
+            result,
+            next_token_ids,
+            hidden_states,
+            requests,
+            flow_rows,
+            consumed_prefill_rows=hidden_row_offset,
         )
-        if host_token_ids is not None:
-            self.stage_token_ids(result, host_token_ids)
-        else:
-            pass
 
-    def is_sync_speaker_audio(self, data: FireRedTTS3SGLangRequestData) -> bool:
+    def is_sync_speaker_audio(self, request_data: FireRedTTS3SGLangRequestData) -> bool:
         return (
             not self.async_enabled
-            and data.state.variant == "speaker"
-            and not data.dual_stream
-            and data.text_ar_mode == TEXT_MODE_AUDIO
+            and request_data.state.variant == "speaker"
+            and (not request_data.dual_stream)
+            and (request_data.text_ar_mode == TEXT_MODE_AUDIO)
         )
 
     def make_next_token_ids(
@@ -801,11 +516,11 @@ class FireRedTTS3ModelRunner(ModelRunner):
         device: torch.device,
         requests: list[SchedulerRequest],
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Separate known reporting IDs from the device's control-token input."""
+        """Separate known reporting tokens from device control-token inputs."""
         if (
             self.control_token_fastpath
-            and all(self.is_sync_speaker_audio(request.data) for request in requests)
-            and all(token == CONTROL_TOKEN_ID for token in next_token_ids)
+            and all((self.is_sync_speaker_audio(request.data) for request in requests))
+            and all((token_id == CONTROL_TOKEN_ID for token_id in next_token_ids))
         ):
             return (
                 torch.full(
@@ -817,131 +532,98 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 torch.tensor(next_token_ids, dtype=torch.long, device="cpu"),
             )
         else:
-            return torch.tensor(next_token_ids, dtype=torch.long, device=device), None
-
-    def audio_hidden_offset(self, data: FireRedTTS3SGLangRequestData) -> int:
-        """Generated-region rows before the patch-driving hiddens. Reached
-        only from the re-prefill cond rebuild (patch_count > 0, so the
-        machine is in steady audio): the text/EOT rows and the FIRST sosp
-        feed precede it; the doubled second sosp feed IS the
-        patch-0-driving audio_zero row and stays inside the slice."""
-        if data.text_ar_mode == TEXT_MODE_AUDIO and (
-            data.text_token_ids or data.eot_sampled
-        ):
-            return len(data.text_token_ids) + int(data.eot_sampled) + 1
-        else:
-            pass
-        return 0
+            return (torch.tensor(next_token_ids, dtype=torch.long, device=device), None)
 
     def record_text_sample(
-        self, data: FireRedTTS3SGLangRequestData, sampled: torch.Tensor
+        self, request_data: FireRedTTS3SGLangRequestData, sampled: torch.Tensor
     ) -> int:
-        """One text-phase sampling event (reference text loop iteration).
-
-        The sampled token rides through to the next feed unchanged. On EOT
-        (or the 200-token budget) the machine moves to FINALIZE: that token's
-        own feed becomes the no-sampling finalize step, matching the
-        reference's post-loop embed(EOT) feed. EOT itself is never recorded
-        (the reference breaks before appending it to text_gen_ids).
-        """
-        token = int(sampled)
-        data.text_fed += 1
-        if token == TEXT_EOT_ID:
-            data.eot_sampled = True
-            data.text_ar_mode = TEXT_MODE_FINALIZE
-            return token
+        """Retain sampled text, excluding EOT, before the audio transition feeds."""
+        token_id = int(sampled)
+        request_data.text_fed += 1
+        if token_id == TEXT_EOT_ID:
+            request_data.eot_sampled = True
+            request_data.text_ar_mode = TEXT_MODE_FINALIZE
+            return token_id
         else:
             pass
-        data.text_token_ids.append(token)
-        if data.text_fed >= TEXT_TOKEN_BUDGET:
-            data.text_ar_mode = TEXT_MODE_FINALIZE
+        request_data.text_token_ids.append(token_id)
+        if request_data.text_fed >= TEXT_TOKEN_BUDGET:
+            request_data.text_ar_mode = TEXT_MODE_FINALIZE
         else:
             pass
-        return token
+        return token_id
 
     def post_decode(
-        self, result, forward_batch, schedule_batch, requests: list
+        self,
+        result: GenerationBatchResult,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
     ) -> None:
-        del forward_batch, schedule_batch
         self.run_post_decode(result, requests)
 
-    def post_decode_launch(self, result, forward_batch, requests: list) -> None:
-        """Async-decode launch half: the flow side path runs in full at launch
-        (same work as the sync post_decode). Stop decisions DEFER to the
-        resolve via defer_stop: the scheduler's overrun drop snapshots
-        finished-state before the resolve, so a finish marked at launch would
-        be mistaken for a prior-step overrun and its finish would never be
-        processed (the request would leak out of the running batch unemitted).
-        """
-        del forward_batch
+    def post_decode_launch(
+        self,
+        result: GenerationBatchResult,
+        forward_batch: ForwardBatch | None,
+        requests: list[SchedulerRequest],
+    ) -> None:
+        """Run flow at launch and defer finish until the scheduler resolves the step."""
         self.run_post_decode(result, requests, defer_stop=True)
-        return None
 
     def post_decode_resolve(
-        self, launch_buf, result, forward_batch, schedule_batch, requests: list
+        self,
+        launch_buf: None,
+        result: GenerationBatchResult,
+        forward_batch: ForwardBatch | None,
+        schedule_batch: ScheduleBatch | None,
+        requests: list[SchedulerRequest],
     ) -> None:
-        """Apply the launch-time stop decisions: the scheduler processes the
-        finish (stream emission, KV release) after this hook within the same
-        resolve. Retracted rows are dropped by the caller; never mark them."""
-        del launch_buf, result, forward_batch, schedule_batch
+        """Apply deferred stops only to requests still owned by this batch."""
         for request in requests:
-            data = request.data
-            if not data.stop_pending:
-                continue
-            else:
-                pass
-            data.stop_pending = False
-            if not data.req.is_retracted and not data.req.finished():
-                data.req.finished_reason = FINISH_MATCHED_TOKEN(CONTROL_TOKEN_ID)
-            else:
-                pass
+            self.resolve_pending_stop(request.data)
 
     def run_post_decode(
-        self, result, requests: list, *, defer_stop: bool = False
+        self,
+        result: GenerationBatchResult,
+        requests: list[SchedulerRequest],
+        *,
+        defer_stop: bool = False,
     ) -> None:
-        """One decode step's flow side path: stop check -> cond window ->
-        DiT Euler -> PatchEncoder feedback, then the control-token rail.
-        Shared by the sync post_decode and the async post_decode_launch."""
+        """Advance one text or audio feed and collect per-request flow work."""
         if not requests:
             return
         else:
             pass
-        hidden = self.hidden_states(result)
-        if hidden.ndim == 3:
-            hidden = hidden[:, -1]
-        elif hidden.ndim != 2:
+        hidden_states = self.hidden_states(result)
+        if hidden_states.ndim == 3:
+            hidden_states = hidden_states[:, -1]
+        elif hidden_states.ndim != 2:
             raise RuntimeError(
-                f"FireRedTTS3 expected rank-2/3 decode hidden, got {hidden.ndim}"
+                f"FireRedTTS3 expected rank-2/3 decode hidden, got {hidden_states.ndim}"
             )
         else:
             pass
         next_token_ids = []
         flow_rows: list[FlowRow] | None = [] if self.flow_batching else None
-        for row, request in enumerate(requests):
-            data = request.data
-            if data.stop_pending:
-                # A stop deferred by prefill or an earlier async launch emits
-                # no more patches. Async resolves in post_decode_resolve;
-                # sync finishes here so decode owns the KV cleanup.
+        for request_row_index, request in enumerate(requests):
+            request_data = request.data
+            if request_data.stop_pending:
                 next_token_ids.append(CONTROL_TOKEN_ID)
                 if not defer_stop:
-                    data.stop_pending = False
-                    if not data.req.is_retracted and not data.req.finished():
-                        data.req.finished_reason = FINISH_MATCHED_TOKEN(
-                            CONTROL_TOKEN_ID
-                        )
-                    else:
-                        pass
+                    self.resolve_pending_stop(request_data)
                 else:
                     pass
                 continue
             else:
                 pass
-            if data.dual_stream:
+            if request_data.dual_stream:
                 next_token_ids.append(
                     self.dual_stream_step(
-                        data,
-                        hidden[row : row + 1].to(torch.float32),
+                        request_data,
+                        hidden_states[request_row_index : request_row_index + 1].to(
+                            torch.float32
+                        ),
                         flow_rows,
                         defer_stop=defer_stop,
                     )
@@ -949,171 +631,117 @@ class FireRedTTS3ModelRunner(ModelRunner):
                 continue
             else:
                 pass
-            mode = data.text_ar_mode
-            if mode == TEXT_MODE_TEXT:
-                next_token_ids.append(
-                    self.record_text_sample(data, result.next_token_ids[row])
-                )
-            elif mode == TEXT_MODE_FINALIZE:
-                # This step fed embed(EOT/last-token); nothing was sampled
-                # (the reference runs the finalize feed without sampling).
-                data.text_ar_mode = TEXT_MODE_SOSP
-                next_token_ids.append(AUDIO_SOS_ID)
-            elif mode == TEXT_MODE_SOSP:
-                data.text_ar_mode = TEXT_MODE_AUDIO_ZERO
-                next_token_ids.append(AUDIO_SOS_ID)
+            text_feed_token_id = self.advance_text_phase(
+                request_data, result, request_row_index
+            )
+            if text_feed_token_id is not None:
+                next_token_ids.append(text_feed_token_id)
             else:
-                if mode == TEXT_MODE_AUDIO_ZERO:
-                    data.text_ar_mode = TEXT_MODE_AUDIO
-                else:
-                    pass
                 self.flow_step(
-                    data,
-                    hidden[row : row + 1].to(torch.float32),
+                    request_data,
+                    hidden_states[request_row_index : request_row_index + 1].to(
+                        torch.float32
+                    ),
                     flow_rows,
                     defer_stop=defer_stop,
                 )
                 next_token_ids.append(CONTROL_TOKEN_ID)
-        if flow_rows:
-            self.run_flow_rows(flow_rows)
-        else:
-            pass
-        result.next_token_ids, host_token_ids = self.make_next_token_ids(
-            next_token_ids, hidden.device, requests
+        self.finish_step(result, next_token_ids, hidden_states, requests, flow_rows)
+
+    def next_text_feed(self, request_data: FireRedTTS3SGLangRequestData) -> int:
+        """Feed the next text token, extending exhausted text with its padding token."""
+        token_ids = request_data.state.text_stream_ids
+        text_token_index = request_data.text_pos
+        request_data.text_pos += 1
+        return (
+            int(token_ids[text_token_index])
+            if text_token_index < len(token_ids)
+            else int(request_data.state.text_pad_id)
         )
-        if host_token_ids is not None:
-            self.stage_token_ids(result, host_token_ids)
-        else:
-            pass
-
-    def dual_stream_cond_rows(
-        self, data: FireRedTTS3SGLangRequestData, hidden_f32: torch.Tensor
-    ) -> torch.Tensor:
-        """Cond-history rows from a re-prefill's full hidden row: per group,
-        the text-last feed (group offset nt - 1) and the intermediate patch
-        feeds (offsets nt .. nt + na - 2) — one row per fired flow, in
-        temporal order."""
-        nt, na = data.interleave_ratio
-        stride = nt + na
-        rows: list[int] = []
-        remaining = data.flow_state.patch_count
-        group = 0
-        while remaining > 0:
-            base = data.prefill_len + group * stride
-            rows.append(base + nt - 1)
-            remaining -= 1
-            for k in range(na - 1):
-                if remaining == 0:
-                    break
-                else:
-                    pass
-                rows.append(base + nt + k)
-                remaining -= 1
-            group += 1
-        return hidden_f32[rows].unsqueeze(0)
-
-    def next_text_feed(self, data: FireRedTTS3SGLangRequestData) -> int:
-        """The next text-stream feed token: the char-modelled text id, or
-        <|text_pad|> once the text is exhausted (reference behaviour)."""
-        ids = data.state.text_stream_ids
-        pos = data.text_pos
-        data.text_pos += 1
-        return int(ids[pos]) if pos < len(ids) else int(data.state.text_pad_id)
 
     def dual_stream_step(
         self,
-        data: FireRedTTS3SGLangRequestData,
-        hidden_f32: torch.Tensor,
+        request_data: FireRedTTS3SGLangRequestData,
+        hidden_states_float32: torch.Tensor,
         flow_rows: list[FlowRow] | None = None,
         *,
         defer_stop: bool = False,
     ) -> int:
-        """One engine step of the dual-stream machine (reference
-        generate_streaming_noicl); returns the next feed's token id.
-
-        (ds_stage, ds_index) locate the CURRENT step (the feed that produced
-        this hidden). Per (nt, na) group: the first nt - 1 text feeds are
-        inert; the last text feed's hidden appends the cond and drives the
-        flow; the first na - 1 patch feeds do the same; the last patch feed
-        only runs the stop check (its patch was emitted one step earlier).
-        """
-        nt, na = data.interleave_ratio
-        if data.ds_stage == DS_STAGE_TEXT:
-            if data.ds_index >= nt - 1:
-                # Last text feed of the group: cond append + flow.
-                self.run_flow(data, hidden_f32, flow_rows)
-                data.ds_stage = DS_STAGE_PATCH
-                data.ds_index = 0
+        """Interleave text and patch feeds, checking stop after each final patch feed."""
+        assert request_data.interleave_ratio is not None
+        text_steps, patch_steps = request_data.interleave_ratio
+        if request_data.ds_stage == DS_STAGE_TEXT:
+            if request_data.ds_index >= text_steps - 1:
+                self.run_flow(request_data, hidden_states_float32, flow_rows)
+                request_data.ds_stage = DS_STAGE_PATCH
+                request_data.ds_index = 0
                 return CONTROL_TOKEN_ID
             else:
                 pass
-            data.ds_index += 1
-            return self.next_text_feed(data)
+            request_data.ds_index += 1
+            return self.next_text_feed(request_data)
         else:
             pass
-        if data.ds_index >= na - 1:
-            # Last patch feed of the group: stop check only.
-            data.ds_stage = DS_STAGE_TEXT
-            data.ds_index = 0
-            if self.stop_predicted(data, hidden_f32):
-                self.mark_stop(data, defer=defer_stop)
+        if request_data.ds_index >= patch_steps - 1:
+            request_data.ds_stage = DS_STAGE_TEXT
+            request_data.ds_index = 0
+            if self.stop_predicted(request_data, hidden_states_float32):
+                self.mark_stop(request_data, defer=defer_stop)
                 return CONTROL_TOKEN_ID
             else:
                 pass
-            return self.next_text_feed(data)
+            return self.next_text_feed(request_data)
         else:
             pass
-        # Intermediate patch feed: its hidden drives the next flow.
-        self.run_flow(data, hidden_f32, flow_rows)
-        data.ds_index += 1
+        self.run_flow(request_data, hidden_states_float32, flow_rows)
+        request_data.ds_index += 1
         return CONTROL_TOKEN_ID
 
     def flow_step(
         self,
-        data: FireRedTTS3SGLangRequestData,
-        hidden_f32: torch.Tensor,
+        request_data: FireRedTTS3SGLangRequestData,
+        hidden_states_float32: torch.Tensor,
         flow_rows: list[FlowRow] | None = None,
         *,
         defer_stop: bool = False,
     ) -> None:
-        """Prefill-form side-path step: the stop check runs BEFORE the flow
-        (a stopping step emits no patch and is never collected)."""
-        if self.stop_predicted(data, hidden_f32):
-            self.mark_stop(data, defer=defer_stop)
+        """Check stop before generating the next patch in a non-interleaved request."""
+        if self.stop_predicted(request_data, hidden_states_float32):
+            self.mark_stop(request_data, defer=defer_stop)
             return
         else:
             pass
-        self.run_flow(data, hidden_f32, flow_rows)
+        self.run_flow(request_data, hidden_states_float32, flow_rows)
 
     @staticmethod
-    def mark_stop(data: FireRedTTS3SGLangRequestData, *, defer: bool) -> None:
-        """Record a stop decision. Prefill and async launches defer the finish;
-        sync decode marks it directly (async uses post_decode_resolve)."""
+    def mark_stop(request_data: FireRedTTS3SGLangRequestData, *, defer: bool) -> None:
+        """Defer prefill and launch stops; decode may finish immediately."""
         if defer:
-            data.stop_pending = True
+            request_data.stop_pending = True
         else:
-            data.req.finished_reason = FINISH_MATCHED_TOKEN(CONTROL_TOKEN_ID)
+            request_data.req.finished_reason = FINISH_MATCHED_TOKEN(CONTROL_TOKEN_ID)
 
     def stop_predicted(
-        self, data: FireRedTTS3SGLangRequestData, hidden_f32: torch.Tensor
+        self,
+        request_data: FireRedTTS3SGLangRequestData,
+        hidden_states_float32: torch.Tensor,
     ) -> bool:
-        """stop_head sigmoid on the span's last row (fp32 red line), gated by
-        the min-patch floor. Dual-stream callers run this AFTER the patch
-        feed (the patch was already emitted); prefill-form callers run it
-        before the flow."""
+        """Evaluate the fp32 stop head with the minimum patch floor."""
         model = self.model
-        flow = data.flow_state
-        state = data.state
+        flow = request_data.flow_state
+        assert isinstance(flow, FlowState)
+        state = request_data.state
         if (
             self.skip_min_patch_stop
-            and self.is_sync_speaker_audio(data)
-            and flow.patch_count < state.min_patches
+            and self.is_sync_speaker_audio(request_data)
+            and (flow.patch_count < state.min_patches)
         ):
             return False
         else:
             pass
-        with torch.inference_mode(), data.probe.segment("stop_head"):
-            stop_logits = model.stop_head(hidden_f32[-1:].unsqueeze(0))
+        assert request_data.probe is not None
+        with torch.inference_mode(), request_data.probe.segment("stop_head"):
+            stop_logits = model.stop_head(hidden_states_float32[-1:].unsqueeze(0))
             stop_score = float(torch.sigmoid(stop_logits).reshape(-1)[-1].item())
         return (
             stop_score >= state.stop_threshold and flow.patch_count >= state.min_patches
@@ -1121,182 +749,260 @@ class FireRedTTS3ModelRunner(ModelRunner):
 
     def run_flow(
         self,
-        data: FireRedTTS3SGLangRequestData,
-        hidden_f32: torch.Tensor,
+        request_data: FireRedTTS3SGLangRequestData,
+        hidden_states_float32: torch.Tensor,
         flow_rows: list[FlowRow] | None = None,
     ) -> None:
-        """One flow step over the request's new hidden rows [T, H] fp32.
-
-        With flow_rows given (flow cross-request batching on), only the
-        per-request half runs here — cond append, dit_head, the deterministic
-        noise draw — and the row is collected; the caller flushes all rows
-        of the engine step in ONE batched DiT + PatchEncoder pass
-        (run_flow_rows). Otherwise the row flushes immediately (the serial
-        path, bit-identical to a B=1 batch on an exact bucket hit).
-        """
-        row = self.prepare_flow_row(data, hidden_f32)
+        """Collect a flow row or run it immediately through the serial path."""
+        flow_row = self.prepare_flow_row(request_data, hidden_states_float32)
         if flow_rows is not None:
-            flow_rows.append(row)
+            flow_rows.append(flow_row)
             return
         else:
             pass
-        self.run_flow_rows([row])
+        self.run_flow_rows([flow_row])
 
     def prepare_flow_row(
-        self, data: FireRedTTS3SGLangRequestData, hidden_f32: torch.Tensor
+        self,
+        request_data: FireRedTTS3SGLangRequestData,
+        hidden_states_float32: torch.Tensor,
     ) -> FlowRow:
-        """The per-request flow-step materials: cond append -> dit_head ->
-        history window -> noise draw (outside any graph, from the request's
-        own generator, preserving the deterministic draw order)."""
+        """Append conditioning and draw noise from this request generator."""
         model = self.model
-        flow = data.flow_state
-        with torch.inference_mode(), data.probe.segment("cond"):
+        flow = request_data.flow_state
+        assert isinstance(flow, FlowState)
+        assert request_data.probe is not None
+        with torch.inference_mode(), request_data.probe.segment("cond"):
             if flow.patch_count == 0 and flow.prompt_patch_count > 0:
-                cond_rows = hidden_f32[-flow.prompt_patch_count :]
+                conditioning_rows = hidden_states_float32[-flow.prompt_patch_count :]
             else:
-                cond_rows = hidden_f32[-1:]
-            flow.backbone_cond = torch.cat(
-                [flow.backbone_cond, cond_rows.unsqueeze(0)], dim=1
+                conditioning_rows = hidden_states_float32[-1:]
+            flow.backbone_conditioning = torch.cat(
+                [flow.backbone_conditioning, conditioning_rows.unsqueeze(0)], dim=1
             )
-            cond_window = flow.backbone_cond[:, -(model.history_patches + 1) :]
-            bb_cond = model.dit_head(cond_window)
-            bb_cond = bb_cond.repeat_interleave(model.patch_size, dim=1)
-            if flow.spk_cond_dit is not None:
-                spk = flow.spk_cond_dit.unsqueeze(1).expand(-1, bb_cond.shape[1], -1)
-                cond = torch.cat([bb_cond, spk], dim=-1)
+            conditioning_window = flow.backbone_conditioning[
+                :, -(model.history_patches + 1) :
+            ]
+            backbone_conditioning = model.dit_head(conditioning_window)
+            backbone_conditioning = backbone_conditioning.repeat_interleave(
+                model.patch_size, dim=1
+            )
+            if flow.speaker_conditioning is not None:
+                speaker_conditioning = flow.speaker_conditioning.unsqueeze(1).expand(
+                    -1, backbone_conditioning.shape[1], -1
+                )
+                conditioning = torch.cat(
+                    [backbone_conditioning, speaker_conditioning], dim=-1
+                )
             else:
-                cond = bb_cond
-            hist = flow.latents_gen[:, -model.history_length :]
-            x0 = torch.empty(
+                conditioning = backbone_conditioning
+            history_latents = flow.latent_history[:, -model.history_length :]
+            initial_noise = torch.empty(
                 1,
                 model.patch_size,
                 model.redae_dim,
-                device=cond.device,
+                device=conditioning.device,
                 dtype=torch.float32,
             )
-            x0.normal_(generator=flow.generator)
-        return (data, hist, x0, cond)
+            initial_noise.normal_(generator=flow.generator)
+        return FlowRow(
+            request_data=request_data,
+            history_latents=history_latents,
+            initial_noise=initial_noise,
+            conditioning=conditioning,
+        )
 
-    def run_flow_rows(self, rows: list[FlowRow]) -> None:
-        """The batched flow half over the engine step's collected rows:
-        one DiT Euler replay (bucket zero-pad as needed) + one PatchEncoder
-        pass, then the per-request writeback in collection order.
-
-        Rows are grouped by n_timesteps — a graph replays one loop count, so
-        a request overriding the ODE steps cannot share a replay with the
-        defaults. cfg scales ride the per-row [B, 1, 1] placeholder, so
-        per-task scales (2.0 / 1.2) do share one replay.
-        """
+    def run_flow_rows(self, flow_rows: list[FlowRow]) -> None:
+        """Group flow rows by Euler step count and write feedback in request order."""
         model = self.model
         groups: dict[int, list[FlowRow]] = {}
-        for row in rows:
-            groups.setdefault(int(row[0].state.n_timesteps), []).append(row)
+        for flow_row in flow_rows:
+            groups.setdefault(int(flow_row.request_data.state.n_timesteps), []).append(
+                flow_row
+            )
         feedback_dtype = next(model.parameters()).dtype
-        for n_timesteps, group in groups.items():
+        for n_timesteps, flow_group in groups.items():
             with torch.inference_mode():
-                hists = torch.cat([row[1] for row in group])
-                x0s = torch.cat([row[2] for row in group])
-                conds = torch.cat([row[3] for row in group])
-                # Per-row CFG scales; cfg <= 0 rides the CFG-doubled shape
-                # and blends to the conditional velocity exactly, so one
-                # code path covers every scale.
-                cfgs = torch.tensor(
-                    [float(row[0].state.inference_cfg) for row in group],
+                history_latents = torch.cat(
+                    [flow_row.history_latents for flow_row in flow_group]
+                )
+                initial_noise = torch.cat(
+                    [flow_row.initial_noise for flow_row in flow_group]
+                )
+                conditioning = torch.cat(
+                    [flow_row.conditioning for flow_row in flow_group]
+                )
+                guidance_scales = torch.tensor(
+                    [
+                        float(flow_row.request_data.state.inference_cfg)
+                        for flow_row in flow_group
+                    ],
                     dtype=torch.float32,
-                    device=conds.device,
+                    device=conditioning.device,
                 ).view(-1, 1, 1)
-                probes = [row[0].probe for row in group]
+                probes = [flow_row.request_data.probe for flow_row in flow_group]
                 with ProfilingProbe.shared_segment("dit_flow", probes):
                     graphs = self.flow_graphs
                     patches = (
-                        graphs.run(hists, x0s, conds, cfgs, n_timesteps)
+                        graphs.run(
+                            history_latents,
+                            initial_noise,
+                            conditioning,
+                            guidance_scales,
+                            n_timesteps,
+                        )
                         if graphs is not None
                         else None
                     )
                     if patches is None:
                         patches = euler_flow_loop(
                             model.dit,
-                            torch.cat([hists, x0s], dim=1),
-                            conds,
-                            self.t_span(n_timesteps, conds.device),
-                            cfgs,
+                            torch.cat([history_latents, initial_noise], dim=1),
+                            conditioning,
+                            self.t_span(n_timesteps, conditioning.device),
+                            guidance_scales,
                             n_timesteps,
                             model.patch_size,
                         )
                     else:
                         pass
                 with ProfilingProbe.shared_segment("patch_encoder", probes):
-                    # Batched rows aggregate to [1, B, llm_hidden] (the
-                    # encoder's trailing unsqueeze); one row per request.
                     feedbacks = model.patch_encoder(patches)
-                for index, (data, _hist, _x0, _cond) in enumerate(group):
-                    flow = data.flow_state
-                    patch = patches[index : index + 1]
-                    flow.latents_gen = torch.cat([flow.latents_gen, patch], dim=1)
+                for request_row_index, flow_row in enumerate(flow_group):
+                    request_data = flow_row.request_data
+                    flow = request_data.flow_state
+                    patch = patches[request_row_index : request_row_index + 1]
+                    flow.latent_history = torch.cat([flow.latent_history, patch], dim=1)
                     flow.patch_count += 1
-                    data.latent_patches.append(patch)
-                    data.pending_feedback_queue.append(
-                        feedbacks[0, index].to(dtype=feedback_dtype)
+                    request_data.latent_patches.append(patch)
+                    request_data.pending_feedback_queue.append(
+                        feedbacks[0, request_row_index].to(dtype=feedback_dtype)
                     )
 
     @staticmethod
-    def hidden_states(result) -> torch.Tensor:
-        logits_output = getattr(result, "logits_output", None)
-        hidden = getattr(logits_output, "hidden_states", None)
-        if hidden is None:
-            hidden = getattr(result, "hidden_states", None)
-        else:
-            pass
-        if not isinstance(hidden, torch.Tensor):
+    def hidden_states(result: GenerationBatchResult) -> torch.Tensor:
+        """Read the hidden tensor guaranteed by the SGLang forward result contract."""
+        logits_output = result.logits_output
+        if logits_output is None or not isinstance(
+            logits_output.hidden_states, torch.Tensor
+        ):
             raise RuntimeError(
                 "FireRedTTS3 SGLang forward did not return hidden states"
             )
         else:
-            pass
-        return hidden
+            return logits_output.hidden_states
 
-    def on_request_finished(self, request_id: str, req_data) -> None:
-        data = self.active_requests.pop(request_id, None)
-        if data is not None and data.probe is not None:
-            data.probe.log(request_id)
+    def on_request_finished(
+        self, request_id: str, request_data: FireRedTTS3SGLangRequestData
+    ) -> None:
+        active_request_data = self.active_requests.pop(request_id, None)
+        if active_request_data is not None and active_request_data.probe is not None:
+            active_request_data.probe.log(request_id)
         else:
             pass
-        self.clear_request_data(req_data)
+        self.clear_request_data(request_data)
 
     def reset_request(self, request_id: str) -> None:
-        req_data = self.active_requests.pop(request_id, None)
-        if req_data is not None:
-            self.clear_request_data(req_data)
+        request_data = self.active_requests.pop(request_id, None)
+        if request_data is not None:
+            self.clear_request_data(request_data)
         else:
             pass
 
     def release_retracted_flow_states(self) -> None:
-        for req_data in self.active_requests.values():
+        for request_data in self.active_requests.values():
             if (
-                req_data.flow_state is not None
-                and not isinstance(req_data.flow_state, FireRedFlowResume)
-                and req_data.req.is_retracted
+                request_data.flow_state is not None
+                and (not isinstance(request_data.flow_state, FireRedFlowResume))
+                and request_data.req.is_retracted
             ):
-                self.suspend_request_data(req_data)
+                self.suspend_request_data(request_data)
             else:
                 pass
 
-    def suspend_request_data(self, req_data: FireRedTTS3SGLangRequestData) -> None:
-        flow = req_data.flow_state
-        assert flow is not None and not isinstance(flow, FireRedFlowResume)
-        req_data.flow_state = FireRedFlowResume(flow.generator.get_state())
-        req_data.pending_feedback_queue.clear()
+    def suspend_request_data(self, request_data: FireRedTTS3SGLangRequestData) -> None:
+        """Release temporary flow buffers while retaining generator state."""
+        flow = request_data.flow_state
+        assert flow is not None and (not isinstance(flow, FireRedFlowResume))
+        request_data.flow_state = FireRedFlowResume(
+            rng_state=flow.generator.get_state()
+        )
+        request_data.pending_feedback_queue.clear()
 
-    def clear_request_data(self, req_data: FireRedTTS3SGLangRequestData) -> None:
-        req_data.pending_feedback_queue.clear()
-        req_data.flow_state = None
-        req_data.stop_pending = False
+    def clear_request_data(self, request_data: FireRedTTS3SGLangRequestData) -> None:
+        request_data.pending_feedback_queue.clear()
+        request_data.flow_state = None
+        request_data.stop_pending = False
+
+    def advance_text_phase(
+        self,
+        request_data: FireRedTTS3SGLangRequestData,
+        result: GenerationBatchResult,
+        request_row_index: int,
+    ) -> int | None:
+        """Advance a text feed; None hands the current hidden row to audio."""
+        if request_data.text_ar_mode == TEXT_MODE_TEXT:
+            assert isinstance(result.next_token_ids, torch.Tensor)
+            return self.record_text_sample(
+                request_data, result.next_token_ids[request_row_index]
+            )
+        elif request_data.text_ar_mode == TEXT_MODE_FINALIZE:
+            request_data.text_ar_mode = TEXT_MODE_SOSP
+            return AUDIO_SOS_ID
+        # note (kermit): The audio loop consumes a second audio-start feed before patch zero.
+        elif request_data.text_ar_mode == TEXT_MODE_SOSP:
+            request_data.text_ar_mode = TEXT_MODE_AUDIO_ZERO
+            return AUDIO_SOS_ID
+        else:
+            if request_data.text_ar_mode == TEXT_MODE_AUDIO_ZERO:
+                request_data.text_ar_mode = TEXT_MODE_AUDIO
+            else:
+                pass
+            return None
+
+    @staticmethod
+    def resolve_pending_stop(request_data: FireRedTTS3SGLangRequestData) -> None:
+        """Finish an owned request at decode or resolve, after the stop was deferred."""
+        if request_data.stop_pending:
+            request_data.stop_pending = False
+            if not request_data.req.is_retracted and (not request_data.req.finished()):
+                request_data.req.finished_reason = FINISH_MATCHED_TOKEN(
+                    CONTROL_TOKEN_ID
+                )
+            else:
+                pass
+        else:
+            pass
+
+    def finish_step(
+        self,
+        result: GenerationBatchResult,
+        next_token_ids: list[int],
+        hidden_states: torch.Tensor,
+        requests: list[SchedulerRequest],
+        flow_rows: list[FlowRow] | None,
+        *,
+        consumed_prefill_rows: int | None = None,
+    ) -> None:
+        """Execute collected flow rows and publish the next token inputs together."""
+        if flow_rows:
+            self.run_flow_rows(flow_rows)
+        else:
+            pass
+        if (
+            consumed_prefill_rows is not None
+            and consumed_prefill_rows != hidden_states.size(0)
+        ):
+            raise RuntimeError("FireRedTTS3 prefill hidden rows do not match requests")
+        else:
+            pass
+        result.next_token_ids, host_token_ids = self.make_next_token_ids(
+            next_token_ids, hidden_states.device, requests
+        )
+        if host_token_ids is not None:
+            self.stage_token_ids(result, host_token_ids)
+        else:
+            pass
 
 
-__all__ = [
-    "DS_STAGE_PATCH",
-    "DS_STAGE_TEXT",
-    "FireRedTTS3ModelRunner",
-    "FlowRow",
-    "FlowState",
-]
+__all__ = ["FireRedTTS3ModelRunner", "FlowRow"]

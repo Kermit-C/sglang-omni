@@ -53,10 +53,8 @@ class CompiledDiTExecutor:
     def compile_backend(
         self, graph_module: torch.fx.GraphModule, example_inputs: list[torch.Tensor]
     ) -> Callable[..., tuple[torch.Tensor, ...]]:
-        compiled = (
-            torch._inductor.compile(  # noqa: leading-underscore  # PyTorch compiler API
-                graph_module, example_inputs, options={"epilogue_fusion": False}
-            )
+        compiled = torch._inductor.compile(  # noqa: SLF001  # leading-underscore: PyTorch compiler API
+            graph_module, example_inputs, options={"epilogue_fusion": False}
         )
 
         def execute(*args: torch.Tensor) -> tuple[torch.Tensor, ...]:
@@ -76,10 +74,10 @@ class CompiledDiTExecutor:
             self.active_modes.reset(token)
 
     def original(self, *, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        with torch._dynamo.config.patch(  # noqa: leading-underscore  # PyTorch compiler API
+        with torch._dynamo.config.patch(  # noqa: SLF001  # leading-underscore: PyTorch compiler API
             recompile_limit=max(
                 DIT_RECOMPILE_LIMIT,
-                torch._dynamo.config.recompile_limit,  # noqa: leading-underscore  # PyTorch compiler API
+                torch._dynamo.config.recompile_limit,  # noqa: SLF001  # leading-underscore: PyTorch compiler API
             ),
             fail_on_recompile_limit_hit=True,
             suppress_errors=False,
@@ -101,10 +99,10 @@ class CompiledDiTExecutor:
         else:
             assert packed_mode.packed_compiled is not None
             observed = packed_mode.packed_compiled
-        with torch._dynamo.config.patch(  # noqa: leading-underscore  # PyTorch compiler API
+        with torch._dynamo.config.patch(  # noqa: SLF001  # leading-underscore: PyTorch compiler API
             recompile_limit=max(
                 DIT_RECOMPILE_LIMIT,
-                torch._dynamo.config.recompile_limit,  # noqa: leading-underscore  # PyTorch compiler API
+                torch._dynamo.config.recompile_limit,  # noqa: SLF001  # leading-underscore: PyTorch compiler API
             ),
             fail_on_recompile_limit_hit=True,
             suppress_errors=False,
@@ -312,7 +310,7 @@ class TimeConditionCache:
                 device=parameter.device,
                 version=(
                     None if torch.is_inference(parameter) else parameter._version
-                ),  # noqa: leading-underscore  # PyTorch tensor version API
+                ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             )
             for name, parameter in dit.named_parameters()
             if name.startswith("t_embedder.") or ".adaLN_modulation." in name
@@ -338,7 +336,7 @@ class TimeConditionCache:
                 device=parameter.device,
                 version=(
                     None if torch.is_inference(parameter) else parameter._version
-                ),  # noqa: leading-underscore  # PyTorch tensor version API
+                ),  # noqa: SLF001  # leading-underscore: PyTorch tensor version API
             )
             if actual != expected:
                 raise TimeCacheUnavailable(
