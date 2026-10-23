@@ -614,7 +614,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology.html">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/tts_process_topology.html">TTS Process Topology</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology_migration.html">Process Topology Migration</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Rust Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/native_media_routes.html">Native Media Routes</a></li>
 </ul>
@@ -637,6 +637,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
@@ -1071,7 +1072,7 @@ window.runMermaid = runMermaid;</script>
 </section>
 <section id="directory-layout">
 <h3>Directory Layout<a class="headerlink" href="#directory-layout" title="Link to this heading">#</a></h3>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>sglang_omni/
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>sglang_omni/
 ├── pipeline/           # Inter-stage orchestration (model-agnostic)
 ├── scheduling/         # Scheduling loops (OmniScheduler, SimpleScheduler)
 ├── model_runner/       # Model runner base + shared FeedbackARModelRunner
@@ -1357,7 +1358,7 @@ Python object references for LOCAL_OBJECT payloads and stream chunks</p></li>
 <hr class="docutils" />
 <section id="model-runner-callbacks">
 <h2>Model Runner + Callbacks<a class="headerlink" href="#model-runner-callbacks" title="Link to this heading">#</a></h2>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>ForwardBatch → before_*() → custom_*_forward() or standard forward → post_*() → sample/output
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ForwardBatch → before_*() → custom_*_forward() or standard forward → post_*() → sample/output
                     ↑ hook             ↑ explicit custom path          ↑ hook
 </pre></div>
 </div>
@@ -1507,7 +1508,7 @@ Python object references for LOCAL_OBJECT payloads and stream chunks</p></li>
 <section id="model-directory-convention">
 <h2>Model Directory Convention<a class="headerlink" href="#model-directory-convention" title="Link to this heading">#</a></h2>
 <p>Every model follows the same file structure:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>models/&lt;model_name&gt;/
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>models/&lt;model_name&gt;/
 ├── config.py              — Pipeline config (stage definitions, GPU placement)
 ├── stages.py              — Stage factories (returns callable or OmniScheduler)
 ├── routing.py             — Stage routing functions (which stage follows which)
@@ -1521,7 +1522,7 @@ Python object references for LOCAL_OBJECT payloads and stream chunks</p></li>
 <p><code class="docutils literal notranslate"><span class="pre">routing.py</span></code> and <code class="docutils literal notranslate"><span class="pre">request_builders.py</span></code> are kept separate because they answer different questions: <code class="docutils literal notranslate"><span class="pre">routing.py</span></code> decides <em>which</em> stage runs next (topology, often deterministic), while <code class="docutils literal notranslate"><span class="pre">request_builders.py</span></code> formats data for models that need special input shapes — e.g. the Qwen3-Omni thinker → talker request transform. Localizing the model-specific format logic in <code class="docutils literal notranslate"><span class="pre">request_builders.py</span></code> keeps <code class="docutils literal notranslate"><span class="pre">routing.py</span></code> thin and framework-shaped.</p>
 <section id="qwen3-omni">
 <h3>Qwen3-Omni<a class="headerlink" href="#qwen3-omni" title="Link to this heading">#</a></h3>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>models/qwen3_omni/
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>models/qwen3_omni/
 ├── config.py              — 8-stage speech, 6-stage text
 ├── stages.py              — 8 factories
 ├── routing.py             — 8 routing functions
@@ -1549,7 +1550,7 @@ Python object references for LOCAL_OBJECT payloads and stream chunks</p></li>
 </section>
 <section id="fish-audio-s2-pro">
 <h3>Fish Audio S2-Pro<a class="headerlink" href="#fish-audio-s2-pro" title="Link to this heading">#</a></h3>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>models/fishaudio_s2_pro/
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>models/fishaudio_s2_pro/
 ├── config.py              — 3-stage TTS
 ├── stages.py              — 3 factories
 ├── routing.py             — 3 routing functions
@@ -1702,7 +1703,7 @@ Python object references for LOCAL_OBJECT payloads and stream chunks</p></li>
 <hr class="docutils" />
 <section id="multi-process-runner">
 <h2>Multi-Process Runner<a class="headerlink" href="#multi-process-runner" title="Link to this heading">#</a></h2>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>pipeline/
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>pipeline/
 ├── stage_workers.py    # StageLaunchConfig, StageWorkerProcessSpec, entrypoint, StageGroup
 └── mp_runner.py        # MultiProcessRunner — orchestrates all groups
 </pre></div>
@@ -1883,13 +1884,7 @@ Python object references for LOCAL_OBJECT payloads and stream chunks</p></li>
 <section id="pr-401-sglang-omni-router-for-v1-router">
 <h3><a class="reference external" href="https://github.com/sgl-project/sglang-omni/pull/401">2026-05-06 — PR #401: SGLang-Omni Router for V1 [Router]</a><a class="headerlink" href="#pr-401-sglang-omni-router-for-v1-router" title="Link to this heading">#</a></h3>
 <p><em>State: MERGED 2026-05-13. Part of #376.</em></p>
-<p>Adds the SGLang-Omni Router: a standalone process (<code class="docutils literal notranslate"><span class="pre">sgl-omni-router</span></code>) that fronts complete V1 server replicas behind one OpenAI-compatible endpoint. Selects one routable worker per request and forwards the original bytes.</p>
-<ul class="simple">
-<li><p><strong>Worker sources:</strong> homogeneous URL pool (<code class="docutils literal notranslate"><span class="pre">--worker-urls</span></code>), heterogeneous JSON manifest with per-worker capabilities (<code class="docutils literal notranslate"><span class="pre">--worker-config</span></code>), or managed local launcher from YAML (<code class="docutils literal notranslate"><span class="pre">--launcher-config</span></code>)</p></li>
-<li><p><strong>Selection pipeline:</strong> payload-size guard → bounded metadata extraction → routable / capability / model filters → safe-superset resolution → policy (<code class="docutils literal notranslate"><span class="pre">round_robin</span></code> / <code class="docutils literal notranslate"><span class="pre">least_request</span></code> / <code class="docutils literal notranslate"><span class="pre">random</span></code>)</p></li>
-<li><p><strong>Health and admin:</strong> per-worker failure tracking drives <code class="docutils literal notranslate"><span class="pre">/ready</span></code>; exposes admin and merged <code class="docutils literal notranslate"><span class="pre">/v1/models</span></code> endpoints</p></li>
-<li><p><strong>Managed launcher:</strong> spawns workers from YAML and waits for all to pass <code class="docutils literal notranslate"><span class="pre">/health</span></code> in parallel before accepting traffic</p></li>
-</ul>
+<p>Introduced the original Python router for complete V1 server replicas, with worker selection, health checks, administrative broadcasts, and managed local workers. That implementation has been retired. See the <a class="reference internal" href="../basic_usage/omni_router.html"><span class="std std-doc">Omni Router guide</span></a> for the current Rust executable and TOML configuration.</p>
 <p><strong>Why it matters:</strong> Decouples horizontal scaling from the pipeline architecture. Each worker remains a full V1 replica with its own Coordinator — the router never splits a request across stages — which keeps the V1 boundary intact while letting deployments scale by replication.</p>
 </section>
 <section id="pr-406-qwen3-omni-v1-real-text-and-audio-streaming-v1-feature">

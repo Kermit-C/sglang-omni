@@ -57,7 +57,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Native Media Routes" href="native_media_routes.html" />
-    <link rel="prev" title="SGLang-Omni Rust Router" href="omni_router.html" />
+    <link rel="prev" title="SGLang-Omni Router" href="omni_router.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.1.9" />
@@ -256,7 +256,7 @@
 <li class="toctree-l1"><a class="reference internal" href="process_topology.html">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tts_process_topology.html">TTS Process Topology</a></li>
 <li class="toctree-l1"><a class="reference internal" href="process_topology_migration.html">Process Topology Migration</a></li>
-<li class="toctree-l1"><a class="reference internal" href="omni_router.html">SGLang-Omni Rust Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="omni_router.html">SGLang-Omni Router</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="native_media_routes.html">Native Media Routes</a></li>
 </ul>
@@ -279,6 +279,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
@@ -687,7 +688,7 @@ numactl<span class="w"> </span>-H<span class="w"> </span><span class="p">|</span
 <ol class="arabic simple" start="5">
 <li><p><strong>Route traffic.</strong></p></li>
 </ol>
-<p>For easy deployment, you can register each replica endpoint with the <a class="reference internal" href="python_router.html"><span class="std std-doc">Python Router</span></a>. Keep the router’s <code class="docutils literal notranslate"><span class="pre">--max-connections</span></code> at least as large as the total offered concurrency. The case study did not benchmark router scheduling policies, so confirm that the selected policy keeps every replica driven and meets your workload’s latency and throughput requirements.</p>
+<p>For easy deployment, configure each replica endpoint in the <a class="reference internal" href="omni_router.html"><span class="std std-doc">Omni Router</span></a>. Set <code class="docutils literal notranslate"><span class="pre">server.max_connections</span></code> for the expected client connections and <code class="docutils literal notranslate"><span class="pre">admission.global</span></code> and the relevant service admission limit for the offered request concurrency. The case study did not benchmark router scheduling policies, so confirm that the selected policy keeps every replica driven and meets your workload’s latency and throughput requirements.</p>
 <ol class="arabic simple" start="6">
 <li><p><strong>Tear down safely.</strong></p></li>
 </ol>
@@ -1051,7 +1052,7 @@ nsys<span class="w"> </span>profile<span class="w"> </span>--gpu-metrics-devices
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">SGLang-Omni Rust Router</p>
+        <p class="prev-next-title">SGLang-Omni Router</p>
       </div>
     </a>
     <a class="right-next"

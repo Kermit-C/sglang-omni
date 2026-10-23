@@ -256,7 +256,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology.html">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/tts_process_topology.html">TTS Process Topology</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology_migration.html">Process Topology Migration</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Rust Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/native_media_routes.html">Native Media Routes</a></li>
 </ul>
@@ -279,6 +279,7 @@
 <li class="toctree-l1"><a class="reference internal" href="full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="asr_bench.html">ASR benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">RL Admin Control</a></li>
@@ -520,7 +521,6 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#authentication">Authentication</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-endpoints">Worker Endpoints</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stage-and-tp-behavior">Stage and TP Behavior</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#router-behavior">Router Behavior</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#weight-checker">Weight Checker</a></li>
 </ul>
             </nav>
@@ -538,7 +538,7 @@
 <p>SGLang-Omni exposes a small administrative API for inference-side RL workflows.
 The contract follows the SGLang and Miles control surface while preserving the
 Omni pipeline boundary:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>HTTP / router -&gt; Client -&gt; Coordinator -&gt; Stage -&gt; Scheduler -&gt; ModelWorker
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Worker HTTP API -&gt; Client -&gt; Coordinator -&gt; Stage -&gt; Scheduler -&gt; ModelWorker
 </pre></div>
 </div>
 <p>The control plane carries only metadata and small result summaries. Tensor
@@ -549,12 +549,10 @@ group, or another data plane.</p>
 <p>Admin endpoints are unauthenticated by default for backward compatibility. They
 require <code class="docutils literal notranslate"><span class="pre">Authorization:</span> <span class="pre">Bearer</span> <span class="pre">&lt;key&gt;</span></code> when either of these is set:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">admin_api_key</span></code> passed to the worker/router <code class="docutils literal notranslate"><span class="pre">create_app(...)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">admin_api_key</span></code> passed to the worker <code class="docutils literal notranslate"><span class="pre">create_app(...)</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">SGLANG_OMNI_ADMIN_KEY</span></code> in the environment</p></li>
 </ul>
-<p>The external router also accepts <code class="docutils literal notranslate"><span class="pre">--admin-api-key</span></code>. The router forwards the
-<code class="docutils literal notranslate"><span class="pre">Authorization</span></code> header to workers, so a deployment can use the same key at both
-layers.</p>
+<p>Send administrative requests directly to the worker endpoints. The Omni Router does not expose these APIs or broadcast administrative requests.</p>
 </section>
 <section id="worker-endpoints">
 <h2>Worker Endpoints<a class="headerlink" href="#worker-endpoints" title="Link to this heading">#</a></h2>
@@ -588,7 +586,7 @@ update fails, the scheduler remains paused because SGLang may have partially
 updated the model weights; recover by reloading or otherwise repairing the
 worker before calling <code class="docutils literal notranslate"><span class="pre">continue_generation</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">/update_weights_from_tensor</span></code> is still reserved for a future tensor data-plane
-integration and returns HTTP 501 from the worker and router HTTP APIs. Once
+integration and returns HTTP 501 from the worker HTTP API. Once
 enabled, a failed tensor update leaves the scheduler paused because tensor
 loading is non-transactional; repair the worker before calling
 <code class="docutils literal notranslate"><span class="pre">continue_generation</span></code>.</p>
@@ -602,19 +600,6 @@ collects one result per rank, and returns a stage-level aggregate result with
 <p>Stages without an admin-capable scheduler return a successful skipped result so
 mixed pipelines can broadcast model info or pause commands without failing on
 pre/post-processing stages.</p>
-</section>
-<section id="router-behavior">
-<h2>Router Behavior<a class="headerlink" href="#router-behavior" title="Link to this heading">#</a></h2>
-<p>The external router broadcasts admin requests to every non-dead worker. Update
-and pause routes temporarily disable target workers from normal request routing
-while the broadcast is in flight, then restore each worker’s previous disabled
-state.</p>
-<p>The router serializes pause, distributed group lifecycle, and weight-update
-broadcasts with an admin update lock. If another update holds the lock for too
-long, the router returns HTTP 503 instead of blocking subsequent admin callers
-indefinitely. If distributed group initialization fails or times out, the target
-worker remains disabled until an operator explicitly re-enables it after
-recovery.</p>
 </section>
 <section id="weight-checker">
 <h2>Weight Checker<a class="headerlink" href="#weight-checker" title="Link to this heading">#</a></h2>
@@ -676,7 +661,6 @@ until the digest completes.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#authentication">Authentication</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-endpoints">Worker Endpoints</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stage-and-tp-behavior">Stage and TP Behavior</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#router-behavior">Router Behavior</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#weight-checker">Weight Checker</a></li>
 </ul>
   </nav></div>

@@ -256,7 +256,7 @@
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tts_process_topology.html">TTS Process Topology</a></li>
 <li class="toctree-l1"><a class="reference internal" href="process_topology_migration.html">Process Topology Migration</a></li>
-<li class="toctree-l1"><a class="reference internal" href="omni_router.html">SGLang-Omni Rust Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="omni_router.html">SGLang-Omni Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="native_media_routes.html">Native Media Routes</a></li>
 </ul>
@@ -279,6 +279,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
@@ -792,9 +793,9 @@ the replicas kernel overlap, weight sharing gives them room to fit.</p>
 </pre></div>
 </div>
 <p>Resolved layout:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">GPU</span> <span class="mi">0</span><span class="p">:</span> <span class="n">image_encoder</span> <span class="o">+</span> <span class="n">audio_encoder</span> <span class="o">+</span> <span class="n">thinker</span>
-<span class="n">GPU</span> <span class="mi">1</span><span class="p">:</span> <span class="n">talker_ar</span><span class="nd">@r0</span> <span class="o">+</span> <span class="n">code2wav</span><span class="nd">@r0</span>
-<span class="n">GPU</span> <span class="mi">2</span><span class="p">:</span> <span class="n">talker_ar</span><span class="nd">@r1</span> <span class="o">+</span> <span class="n">code2wav</span><span class="nd">@r1</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>GPU 0: image_encoder + audio_encoder + thinker
+GPU 1: talker_ar@r0 + code2wav@r0
+GPU 2: talker_ar@r1 + code2wav@r1
 </pre></div>
 </div>
 <p>Run it with <code class="docutils literal notranslate"><span class="pre">sgl-omni</span> <span class="pre">serve</span> <span class="pre">--config</span> <span class="pre">examples/configs/qwen3_omni_speech_replica2.yaml</span> <span class="pre">--port</span> <span class="pre">8091</span></code>; the full file is

@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>SGLang-Omni Rust Router &#8212; SGLang</title>
+    <title>SGLang-Omni Router &#8212; SGLang</title>
   
   
   
@@ -614,7 +614,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l1"><a class="reference internal" href="process_topology.html">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tts_process_topology.html">TTS Process Topology</a></li>
 <li class="toctree-l1"><a class="reference internal" href="process_topology_migration.html">Process Topology Migration</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">SGLang-Omni Rust Router</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">SGLang-Omni Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="native_media_routes.html">Native Media Routes</a></li>
 </ul>
@@ -637,6 +637,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
@@ -865,7 +866,7 @@ window.runMermaid = runMermaid;</script>
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>SGLang-Omni Rust Router</h1>
+    <h1>SGLang-Omni Router</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -903,7 +904,6 @@ window.runMermaid = runMermaid;</script>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#source-layout">Source layout</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#python-router">Python Router</a></li>
 </ul>
             </nav>
         </div>
@@ -915,8 +915,8 @@ window.runMermaid = runMermaid;</script>
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="sglang-omni-rust-router">
-<h1>SGLang-Omni Rust Router<a class="headerlink" href="#sglang-omni-rust-router" title="Link to this heading">#</a></h1>
+  <section class="tex2jax_ignore mathjax_ignore" id="sglang-omni-router">
+<h1>SGLang-Omni Router<a class="headerlink" href="#sglang-omni-router" title="Link to this heading">#</a></h1>
 <p><code class="docutils literal notranslate"><span class="pre">sgl-omni-router</span></code> is the multi-threaded Rust data plane for SGLang-Omni. It
 routes OpenAI-compatible chat, speech, transcription, translation, and
 realtime requests across compatible worker replicas with bounded admission,
@@ -976,7 +976,7 @@ supervise them.</p>
 <section id="rust-binary">
 <h3>Rust Binary<a class="headerlink" href="#rust-binary" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/sgl-project/sglang-omni.git
-<span class="nb">cd</span><span class="w"> </span>sglang-omni/sglang_omni_router/rust
+<span class="nb">cd</span><span class="w"> </span>sglang-omni/sglang_omni_router
 
 <span class="c1"># Build release binary</span>
 cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--locked
@@ -1451,11 +1451,6 @@ loopback sockets where transport behavior is part of the contract.</p>
 </div>
 </section>
 </section>
-<section id="python-router">
-<h2>Python Router<a class="headerlink" href="#python-router" title="Link to this heading">#</a></h2>
-<p>The Python router remains available as <code class="docutils literal notranslate"><span class="pre">sgl-omni-router-py</span></code>. Its guide is
-<code class="docutils literal notranslate"><span class="pre">docs/basic_usage/python_router.md</span></code>.</p>
-</section>
 </section>
 
 
@@ -1533,7 +1528,6 @@ loopback sockets where transport behavior is part of the contract.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#source-layout">Source layout</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#python-router">Python Router</a></li>
 </ul>
   </nav></div>
 
