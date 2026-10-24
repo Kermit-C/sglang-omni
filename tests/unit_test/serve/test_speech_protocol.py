@@ -1201,42 +1201,12 @@ def test_zero_required_references_rejects_any_reference(tmp_path: Path) -> None:
     service.parse_request({"input": "hello"})
 
 
-def test_dual_stream_gated_on_checkpoint_capability() -> None:
-    unsupported = SpeechRequestValidator(default_model="tts")
-    supported = SpeechRequestValidator(
-        default_model="tts", speech_dual_stream_supported=True
-    )
-
-    with pytest.raises(SpeechAPIError) as exc_info:
-        unsupported.parse_request(
-            {"input": "hello", "extra_params": {"dual_stream": True}}
-        )
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.param == "extra_params"
-
-    request = supported.parse_request(
-        {"input": "hello", "extra_params": {"dual_stream": True, "style": "calm"}}
-    )
-    assert request.extra_params == {"dual_stream": True, "style": "calm"}
-
-    with pytest.raises(SpeechAPIError):
-        supported.parse_request(
-            {"input": "hello", "extra_params": {"dual_stream": "yes"}}
-        )
-    with pytest.raises(SpeechAPIError):
-        supported.parse_request({"input": "hello", "extra_params": {"style": 3}})
-    with pytest.raises(SpeechAPIError):
-        supported.parse_request({"input": "hello", "extra_params": [1]})
-
-
 def test_extra_params_ride_the_generate_request() -> None:
-    service = SpeechRequestValidator(
-        default_model="tts", speech_dual_stream_supported=True
-    )
+    service = SpeechRequestValidator(default_model="tts")
     prepared = service.parse_generation_request(
         {
             "input": "hello",
-            "extra_params": {"dual_stream": True, "style": "calm"},
+            "extra_params": {"dual_stream": True, "style": 3},
             "initial_codec_chunk_frames": 8,
         }
     )
@@ -1246,5 +1216,5 @@ def test_extra_params_ride_the_generate_request() -> None:
         reference_descriptors=prepared.reference_descriptors,
     )
     assert generate_request.extra_params["dual_stream"] is True
-    assert generate_request.extra_params["style"] == "calm"
+    assert generate_request.extra_params["style"] == 3
     assert generate_request.extra_params["initial_codec_chunk_frames"] == 8

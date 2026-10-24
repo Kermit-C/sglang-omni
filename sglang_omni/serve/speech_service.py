@@ -17,7 +17,11 @@ from pydantic import AliasChoices, BaseModel, ValidationError
 
 from sglang_omni.client import ClientError, GenerateRequest, SamplingParams
 from sglang_omni.client.audio import audio_encoding_unavailable_reason
-from sglang_omni.config.schema import MAX_SPEECH_INPUT_CHARS, CustomVoiceConfig
+from sglang_omni.config.schema import (
+    MAX_SPEECH_INPUT_CHARS,
+    CustomVoiceConfig,
+    SpeechExtraParamsValidator,
+)
 from sglang_omni.preprocessing.base import MediaIO
 from sglang_omni.preprocessing.resource_connector import MultiModalResourceConnector
 from sglang_omni.scheduling.streaming_vocoder import INITIAL_CODEC_CHUNK_FRAMES_PARAM
@@ -136,7 +140,7 @@ class SpeechRequestValidator:
         required_speech_reference_count: int | None = None,
         speech_reference_text_required: bool = False,
         speech_reference_text_excludes_instructions: bool = False,
-        speech_dual_stream_supported: bool = False,
+        speech_extra_params_validator: SpeechExtraParamsValidator | None = None,
         additional_speech_languages: frozenset[str] = frozenset(),
         speech_empty_input_task_types: frozenset[str] = frozenset(),
         speech_native_speed_control: bool = False,
@@ -191,7 +195,9 @@ class SpeechRequestValidator:
         )
         self.required_speech_reference_count = required_speech_reference_count
         self.speech_reference_text_required = speech_reference_text_required
-        self.speech_dual_stream_supported = speech_dual_stream_supported
+        self.speech_extra_params_validator: SpeechExtraParamsValidator | None = (
+            speech_extra_params_validator
+        )
         self.max_speech_input_chars = max_speech_input_chars
         self.speech_reference_text_excludes_instructions = (
             speech_reference_text_excludes_instructions
@@ -370,7 +376,10 @@ class SpeechRequestValidator:
         else:
             pass
         self.validate_custom_voice_request(request, task_type=updates.get("task_type"))
-        self.validate_extra_params(request)
+        if self.speech_extra_params_validator is not None:
+            self.speech_extra_params_validator(request.extra_params)
+        else:
+            pass
         if request.language is not None:
             updates["language"] = self.normalize_language(request.language)
         else:
@@ -426,41 +435,6 @@ class SpeechRequestValidator:
             f"Unknown voice '{request.voice}'. Supported voices: {supported}",
             param="voice",
         )
-
-    def validate_extra_params(self, request: CreateSpeechRequest) -> None:
-        """Gate the model-specific extra_params this deployment supports."""
-        extra = request.extra_params
-        if extra is None:
-            return
-        else:
-            pass
-        if "dual_stream" in extra:
-            if not isinstance(extra["dual_stream"], bool):
-                raise bad_request(
-                    "extra_params.dual_stream must be a boolean",
-                    param="extra_params",
-                )
-            else:
-                pass
-            if extra["dual_stream"] and not self.speech_dual_stream_supported:
-                raise bad_request(
-                    "extra_params.dual_stream requires a dual-stream-capable "
-                    "checkpoint (this deployment does not support it)",
-                    param="extra_params",
-                )
-            else:
-                pass
-        else:
-            pass
-        if "style" in extra and extra["style"] is not None:
-            if not isinstance(extra["style"], str):
-                raise bad_request(
-                    "extra_params.style must be a string", param="extra_params"
-                )
-            else:
-                pass
-        else:
-            pass
 
     def normalize_language(self, value: str) -> str:
         normalized = self.tts_language_aliases.get(value.strip().lower())

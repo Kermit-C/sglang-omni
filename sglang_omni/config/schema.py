@@ -19,12 +19,19 @@ from sglang_omni.proto.session import (
     SessionGraph,
     SessionNode,
 )
+from sglang_omni.utils.json import JsonValue
 
 if TYPE_CHECKING:
     from sglang_omni.serve.realtime.transcription_session import StreamingASRStrategy
 else:
     pass
 REPLICA_SEPARATOR = "@r"
+
+
+class SpeechExtraParamsValidator(Protocol):
+    """Validate model-owned parameters before backend dispatch."""
+
+    def __call__(self, extra_params: dict[str, JsonValue] | None) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -737,9 +744,7 @@ class PipelineConfig(BaseModel):
     # The model consumes the speed field itself (native instruction control),
     # so the serving layer must not re-apply it as an encode-time post-process.
     speech_native_speed_control: ClassVar[bool] = False
-    # The checkpoint supports the dual-stream decode form (interleaved
-    # text/audio feeding), exposed as the extra_params.dual_stream opt-in.
-    speech_dual_stream_supported: ClassVar[bool] = False
+    speech_extra_params_validator: ClassVar[SpeechExtraParamsValidator | None] = None
     additional_speech_languages: ClassVar[frozenset[str]] = frozenset()
     realtime_transcription: ClassVar[RealtimeTranscriptionConfig | None] = None
     realtime_deployment_factory: ClassVar[str | None] = None

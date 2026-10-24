@@ -6,12 +6,16 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
+from typing import Literal
+from unittest import mock
 
 import pytest
 import torch
+from fastapi.testclient import TestClient
 from sglang.srt.models.registry import ModelRegistry
 from transformers import AutoConfig
 
+from sglang_omni.client.client import Client
 from sglang_omni.config.resolver import ConfigResolver
 from sglang_omni.config.runtime import resolve_stage_typed_kwargs
 from sglang_omni.config.sources import patches_from_shared_block
@@ -19,12 +23,15 @@ from sglang_omni.model_runner.sglang_model_runner import SGLModelRunner
 from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.hf_config import (
     FireRedTTS3Config,
+    FireRedTTS3Variant,
     detect_fireredtts3_variant,
     register_fireredtts3_hf_config,
 )
 from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
+from sglang_omni.serve.openai_api import create_app
+from sglang_omni.serve.speech_service import SpeechRequestValidator
 from sglang_omni.utils.json import JsonValue
 
 
@@ -92,7 +99,22 @@ def test_checkpoint_config_drives_pipeline_topology(
     assert pipeline.terminal_stages == ["vocoder"]
     assert pipeline.required_speech_reference_count == reference_count
     assert pipeline.speech_reference_text_required is text_required
-    assert pipeline.speech_dual_stream_supported is dual_stream
+    service = SpeechRequestValidator(
+        default_model="tts",
+        speech_extra_params_validator=pipeline.speech_extra_params_validator,
+    )
+    prepared = service.parse_generation_request(
+        {
+            "input": "hello",
+            "extra_params": {"dual_stream": dual_stream, "style": "calm"},
+        }
+    )
+    generated = service.build_generate_request(
+        prepared.request,
+        validate=False,
+        reference_descriptors=prepared.reference_descriptors,
+    )
+    assert generated.extra_params == {"dual_stream": dual_stream, "style": "calm"}
 
 
 def test_unknown_checkpoint_variant_is_rejected() -> None:
@@ -218,3 +240,43 @@ def test_firered_tts3_state_wire_round_trip() -> None:
             assert torch.equal(actual, expected), state_field.name
         else:
             assert actual == expected, state_field.name
+
+
+@pytest.mark.parametrize(
+    "variant,extra_params,delivery",
+    [
+        ("base", {"dual_stream": True}, "single"),
+        ("speaker", {"dual_stream": "yes"}, "batch"),
+        ("speaker", {"style": 3}, "single"),
+        ("speaker", [1], "single"),
+    ],
+)
+def test_speech_parameters_rejected_before_generation(
+    variant: FireRedTTS3Variant,
+    extra_params: dict[str, JsonValue] | list[int],
+    delivery: Literal["single", "batch"],
+) -> None:
+    """Invalid model parameters must return 400 before any backend dispatch."""
+    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant=variant)
+    backend = mock.create_autospec(Client, instance=True)
+    client = TestClient(
+        create_app(
+            backend,
+            model_name="tts",
+            speech_extra_params_validator=pipeline.speech_extra_params_validator,
+        )
+    )
+    payload = {"input": "hello", "extra_params": extra_params}
+    if delivery == "batch":
+        response = client.post("/v1/audio/speech/batch", json={"items": [payload]})
+        assert response.status_code == 200
+        result = response.json()["results"][0]
+        assert result["status"] == "error"
+        assert result["error"]["code"] == 400
+        assert result["error"]["param"] == "items.0.extra_params"
+    else:
+        response = client.post("/v1/audio/speech", json=payload)
+        assert response.status_code == 400
+        assert response.json()["error"]["param"] == "extra_params"
+    backend.speech.assert_not_called()
+    backend.generate.assert_not_called()

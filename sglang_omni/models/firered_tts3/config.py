@@ -13,6 +13,7 @@ from sglang_omni.config.schema import (
     EngineStageConfig,
     FactoryArgs,
     PipelineConfig,
+    SpeechExtraParamsValidator,
     StageConfig,
 )
 from sglang_omni.models.firered_tts3.flow_graph import FlowMode
@@ -21,6 +22,8 @@ from sglang_omni.models.firered_tts3.hf_config import (
     FireRedTTS3Variant,
     detect_fireredtts3_variant,
 )
+from sglang_omni.serve.speech_errors import bad_request
+from sglang_omni.utils.json import JsonValue
 
 PACKAGE_PATH = "sglang_omni.models.firered_tts3"
 
@@ -183,8 +186,40 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
         return None if self.variant == "instruct" else 1
 
     @property
-    def speech_dual_stream_supported(self) -> bool:
-        return self.variant == "speaker"
+    def speech_extra_params_validator(self) -> SpeechExtraParamsValidator:
+        return self.validate_speech_extra_params
+
+    def validate_speech_extra_params(
+        self, extra_params: dict[str, JsonValue] | None
+    ) -> None:
+        if extra_params is None:
+            return
+        else:
+            pass
+        if "dual_stream" in extra_params:
+            if not isinstance(extra_params["dual_stream"], bool):
+                raise bad_request(
+                    "extra_params.dual_stream must be a boolean", param="extra_params"
+                )
+            elif extra_params["dual_stream"] and self.variant != "speaker":
+                raise bad_request(
+                    "extra_params.dual_stream requires a dual-stream-capable "
+                    "checkpoint (this deployment does not support it)",
+                    param="extra_params",
+                )
+            else:
+                pass
+        else:
+            pass
+        if "style" in extra_params and extra_params["style"] is not None:
+            if not isinstance(extra_params["style"], str):
+                raise bad_request(
+                    "extra_params.style must be a string", param="extra_params"
+                )
+            else:
+                pass
+        else:
+            pass
 
     @property
     def speech_reference_text_required(self) -> bool:

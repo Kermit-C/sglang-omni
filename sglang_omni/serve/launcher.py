@@ -732,8 +732,8 @@ async def run_server(
                 speech_native_speed_control=(
                     pipeline_config.speech_native_speed_control
                 ),
-                speech_dual_stream_supported=(
-                    pipeline_config.speech_dual_stream_supported
+                speech_extra_params_validator=(
+                    pipeline_config.speech_extra_params_validator
                 ),
                 additional_speech_languages=pipeline_config.additional_speech_languages,
                 max_speech_input_chars=pipeline_config.max_speech_input_chars,

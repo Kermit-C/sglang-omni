@@ -79,7 +79,7 @@ from sglang_omni.config import (
     RealtimeTranscriptionConfig,
     ResolvedAudioChunking,
 )
-from sglang_omni.config.schema import MAX_SPEECH_INPUT_CHARS
+from sglang_omni.config.schema import MAX_SPEECH_INPUT_CHARS, SpeechExtraParamsValidator
 from sglang_omni.http.admin_auth import (
     make_admin_auth_dependency,
     resolve_admin_api_key,
@@ -232,7 +232,7 @@ def create_app(
     speech_reference_text_excludes_instructions: bool = False,
     speech_empty_input_task_types: frozenset[str] = frozenset(),
     speech_native_speed_control: bool = False,
-    speech_dual_stream_supported: bool = False,
+    speech_extra_params_validator: SpeechExtraParamsValidator | None = None,
     additional_speech_languages: frozenset[str] = frozenset(),
     max_speech_input_chars: int | None = MAX_SPEECH_INPUT_CHARS,
     supported_speech_fields: frozenset[str] | None = None,
@@ -276,8 +276,7 @@ def create_app(
         speech_native_speed_control: Whether the model consumes the speed
             field natively (the serving layer then skips the encode-time
             speed post-process).
-        speech_dual_stream_supported: Whether the deployed checkpoint accepts
-            the extra_params.dual_stream decode-form opt-in.
+        speech_extra_params_validator: Model-owned validation of extra speech parameters.
         additional_speech_languages: Pipeline-specific accepted languages.
         max_speech_input_chars: Maximum accepted input characters, or ``None``
             to defer length validation to model-specific context checks.
@@ -354,7 +353,7 @@ def create_app(
         ),
         speech_empty_input_task_types=speech_empty_input_task_types,
         speech_native_speed_control=speech_native_speed_control,
-        speech_dual_stream_supported=speech_dual_stream_supported,
+        speech_extra_params_validator=speech_extra_params_validator,
         additional_speech_languages=additional_speech_languages,
         max_speech_input_chars=max_speech_input_chars,
         supported_speech_fields=supported_speech_fields,
