@@ -19,19 +19,12 @@ from sglang_omni.proto.session import (
     SessionGraph,
     SessionNode,
 )
-from sglang_omni.utils.json import JsonValue
 
 if TYPE_CHECKING:
     from sglang_omni.serve.realtime.transcription_session import StreamingASRStrategy
 else:
     pass
 REPLICA_SEPARATOR = "@r"
-
-
-class SpeechExtraParamsValidator(Protocol):
-    """Validate model-owned parameters before backend dispatch."""
-
-    def __call__(self, extra_params: dict[str, JsonValue] | None) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -738,13 +731,7 @@ class PipelineConfig(BaseModel):
     required_speech_reference_count: ClassVar[int | None] = None
     speech_reference_text_required: ClassVar[bool] = False
     speech_reference_text_excludes_instructions: ClassVar[bool] = False
-    # Speech task_type values whose requests may carry an empty input (the
-    # content rides the reference audio instead — e.g. speech editing).
-    speech_empty_input_task_types: ClassVar[frozenset[str]] = frozenset()
-    # The model consumes the speed field itself (native instruction control),
-    # so the serving layer must not re-apply it as an encode-time post-process.
-    speech_native_speed_control: ClassVar[bool] = False
-    speech_extra_params_validator: ClassVar[SpeechExtraParamsValidator | None] = None
+    speech_request_validator_factory: ClassVar[str | None] = None
     additional_speech_languages: ClassVar[frozenset[str]] = frozenset()
     realtime_transcription: ClassVar[RealtimeTranscriptionConfig | None] = None
     realtime_deployment_factory: ClassVar[str | None] = None

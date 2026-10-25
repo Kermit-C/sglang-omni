@@ -381,9 +381,7 @@ SUPPORTED_TTS_LANGUAGES = frozenset(
         "Italian",
     }
 )
-SUPPORTED_TTS_TASK_TYPES = frozenset(
-    {"Base", "CustomVoice", "VoiceDesign", "SemanticEdit", "AcousticEdit"}
-)
+SUPPORTED_TTS_TASK_TYPES = frozenset({"Base", "CustomVoice", "VoiceDesign"})
 TTS_SPEED_MIN = 0.25
 TTS_SPEED_MAX = 4.0
 DEFAULT_TTS_BATCH_MAX_ITEMS = 32

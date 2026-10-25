@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import json
 from pathlib import Path
@@ -15,12 +16,13 @@ from fastapi.testclient import TestClient
 from sglang.srt.models.registry import ModelRegistry
 from transformers import AutoConfig
 
+import sglang_omni.serve.speech_service as speech_service
 from sglang_omni.client.client import Client
 from sglang_omni.config.resolver import ConfigResolver
 from sglang_omni.config.runtime import resolve_stage_typed_kwargs
 from sglang_omni.config.sources import patches_from_shared_block
-from sglang_omni.model_runner.sglang_model_runner import SGLModelRunner
 from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
+from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
 from sglang_omni.models.firered_tts3.hf_config import (
     FireRedTTS3Config,
     FireRedTTS3Variant,
@@ -31,7 +33,9 @@ from sglang_omni.models.firered_tts3.payload_types import FireRedTTS3State
 from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 from sglang_omni.serve.openai_api import create_app
+from sglang_omni.serve.speech_errors import SpeechAPIError
 from sglang_omni.serve.speech_service import SpeechRequestValidator
+from sglang_omni.utils.imports import import_string
 from sglang_omni.utils.json import JsonValue
 
 
@@ -69,7 +73,7 @@ def test_firered_tts3_pipeline_is_registered() -> None:
                 "use_lm_head": True,
             },
             ["preprocessing", "talker", "vocoder"],
-            0,
+            None,
             False,
             True,
         ),
@@ -99,14 +103,14 @@ def test_checkpoint_config_drives_pipeline_topology(
     assert pipeline.terminal_stages == ["vocoder"]
     assert pipeline.required_speech_reference_count == reference_count
     assert pipeline.speech_reference_text_required is text_required
-    service = SpeechRequestValidator(
+    service = import_string(pipeline.speech_request_validator_factory)(
         default_model="tts",
-        speech_extra_params_validator=pipeline.speech_extra_params_validator,
     )
     prepared = service.parse_generation_request(
         {
             "input": "hello",
             "extra_params": {"dual_stream": dual_stream, "style": "calm"},
+            "initial_codec_chunk_frames": 8,
         }
     )
     generated = service.build_generate_request(
@@ -114,7 +118,11 @@ def test_checkpoint_config_drives_pipeline_topology(
         validate=False,
         reference_descriptors=prepared.reference_descriptors,
     )
-    assert generated.extra_params == {"dual_stream": dual_stream, "style": "calm"}
+    assert generated.extra_params == {
+        "dual_stream": dual_stream,
+        "style": "calm",
+        "initial_codec_chunk_frames": 8,
+    }
 
 
 def test_unknown_checkpoint_variant_is_rejected() -> None:
@@ -180,8 +188,20 @@ def test_firered_tts3_rejects_tp() -> None:
         FireRedTTS3PipelineConfig(**config_values)
 
 
-def test_firered_tts3_model_registered_with_sglang() -> None:
-    SGLModelRunner.register_omni_model(SGLModelRunner)
+def test_firered_tts3_model_registered_with_sglang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(
+        ModelRegistry.models, "FireRedTTS3ForConditionalGeneration", raising=False
+    )
+    pipeline = FireRedTTS3PipelineConfig(model_path="model")
+    builder = FireRedTTS3EngineBuilder(
+        max_running_requests=pipeline.generation_admission_defaults()[
+            "max_running_requests"
+        ],
+        **pipeline.stage_factory_kwargs("talker"),
+    )
+    builder.pre_infra_setup("model")
 
     assert (
         ModelRegistry.models["FireRedTTS3ForConditionalGeneration"]
@@ -263,7 +283,9 @@ def test_speech_parameters_rejected_before_generation(
         create_app(
             backend,
             model_name="tts",
-            speech_extra_params_validator=pipeline.speech_extra_params_validator,
+            speech_request_validator_cls=import_string(
+                pipeline.speech_request_validator_factory
+            ),
         )
     )
     payload = {"input": "hello", "extra_params": extra_params}
@@ -280,3 +302,63 @@ def test_speech_parameters_rejected_before_generation(
         assert response.json()["error"]["param"] == "extra_params"
     backend.speech.assert_not_called()
     backend.generate.assert_not_called()
+
+
+@pytest.mark.parametrize("reference_state", ["missing", "oversized"])
+def test_reference_audio_rejects_invalid_bare_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference_state: Literal["missing", "oversized"],
+) -> None:
+    """Restoring local audio loading must preserve missing-file and size errors."""
+    audio_path = tmp_path / "reference.wav"
+    if reference_state == "oversized":
+        audio_path.write_bytes(b"RIFF")
+        monkeypatch.setattr(speech_service, "MAX_REFERENCE_AUDIO_BYTES", 3)
+    else:
+        pass
+    service = SpeechRequestValidator(default_model="tts")
+    with pytest.raises(SpeechAPIError) as failure:
+        service.parse_request({"input": "hello", "ref_audio": str(audio_path)})
+    assert failure.value.status_code == 400
+    assert failure.value.param == "ref_audio"
+
+
+def test_speaker_rejects_reference_audio() -> None:
+    """Speaker-token checkpoints must reject references at the API boundary."""
+    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant="speaker")
+    service = import_string(pipeline.speech_request_validator_factory)(
+        default_model="tts"
+    )
+    reference = "data:audio/wav;base64," + base64.b64encode(b"RIFF").decode("ascii")
+    for fields in (
+        {"ref_audio": reference},
+        {"references": [{"audio_path": reference}]},
+    ):
+        with pytest.raises(SpeechAPIError) as failure:
+            service.parse_request({"input": "hello", **fields})
+        assert failure.value.status_code == 400
+        assert "does not accept speech references" in failure.value.message
+    service.parse_request({"input": "hello"})
+
+
+@pytest.mark.parametrize("task_type", ["semantic_edit", "AcousticEdit"])
+def test_editing_policy_is_scoped_to_firered(task_type: str) -> None:
+    """FireRed editing must not enable empty input or native speed for other models."""
+    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant="instruct")
+    editing = import_string(pipeline.speech_request_validator_factory)(
+        default_model="tts"
+    )
+    generic = SpeechRequestValidator(default_model="tts")
+    payload = {"input": "", "task_type": task_type, "speed": 0.8}
+    prepared = editing.parse_generation_request(payload)
+    assert prepared.request.task_type in {"SemanticEdit", "AcousticEdit"}
+    assert editing.resolve_encode_speed(prepared.request) == 1.0
+    with pytest.raises(SpeechAPIError) as failure:
+        generic.parse_generation_request(payload)
+    assert failure.value.param == "input"
+    with pytest.raises(SpeechAPIError) as failure:
+        generic.parse_generation_request({**payload, "input": "hello"})
+    assert failure.value.param == "task_type"
+    prepared = generic.parse_generation_request({"input": "hello", "speed": 0.8})
+    assert generic.resolve_encode_speed(prepared.request) == 0.8

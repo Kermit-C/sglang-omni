@@ -17,11 +17,7 @@ from pydantic import AliasChoices, BaseModel, ValidationError
 
 from sglang_omni.client import ClientError, GenerateRequest, SamplingParams
 from sglang_omni.client.audio import audio_encoding_unavailable_reason
-from sglang_omni.config.schema import (
-    MAX_SPEECH_INPUT_CHARS,
-    CustomVoiceConfig,
-    SpeechExtraParamsValidator,
-)
+from sglang_omni.config.schema import MAX_SPEECH_INPUT_CHARS, CustomVoiceConfig
 from sglang_omni.preprocessing.base import MediaIO
 from sglang_omni.preprocessing.resource_connector import MultiModalResourceConnector
 from sglang_omni.scheduling.streaming_vocoder import INITIAL_CODEC_CHUNK_FRAMES_PARAM
@@ -140,10 +136,7 @@ class SpeechRequestValidator:
         required_speech_reference_count: int | None = None,
         speech_reference_text_required: bool = False,
         speech_reference_text_excludes_instructions: bool = False,
-        speech_extra_params_validator: SpeechExtraParamsValidator | None = None,
         additional_speech_languages: frozenset[str] = frozenset(),
-        speech_empty_input_task_types: frozenset[str] = frozenset(),
-        speech_native_speed_control: bool = False,
         max_speech_input_chars: int | None = MAX_SPEECH_INPUT_CHARS,
         allowed_local_media_path: str | Path | None = None,
         allowed_media_domains: list[str] | None = None,
@@ -157,9 +150,9 @@ class SpeechRequestValidator:
             pass
         if (
             required_speech_reference_count is not None
-            and required_speech_reference_count < 0
+            and required_speech_reference_count < 1
         ):
-            raise ValueError("required_speech_reference_count must not be negative")
+            raise ValueError("required_speech_reference_count must be greater than 0")
         else:
             pass
         if max_speech_input_chars is not None and (
@@ -195,15 +188,10 @@ class SpeechRequestValidator:
         )
         self.required_speech_reference_count = required_speech_reference_count
         self.speech_reference_text_required = speech_reference_text_required
-        self.speech_extra_params_validator: SpeechExtraParamsValidator | None = (
-            speech_extra_params_validator
-        )
         self.max_speech_input_chars = max_speech_input_chars
         self.speech_reference_text_excludes_instructions = (
             speech_reference_text_excludes_instructions
         )
-        self.speech_empty_input_task_types = speech_empty_input_task_types
-        self.speech_native_speed_control = speech_native_speed_control
         supported_languages = SUPPORTED_TTS_LANGUAGES | frozenset(
             additional_speech_languages
         )
@@ -315,16 +303,8 @@ class SpeechRequestValidator:
     def validate_input_text(
         self, input_text: str, *, task_type: str | None = None
     ) -> None:
-        if not isinstance(input_text, str):
-            raise bad_request("input must be a non-empty string", param="input")
-        else:
-            pass
-        if not input_text.strip():
-            # Edit-style tasks carry their content in the reference audio.
-            if task_type in self.speech_empty_input_task_types:
-                return
-            else:
-                pass
+        """Validate text; model overrides may use task_type for audio editing."""
+        if not isinstance(input_text, str) or not input_text.strip():
             raise bad_request("input must be a non-empty string", param="input")
         else:
             pass
@@ -340,12 +320,7 @@ class SpeechRequestValidator:
     def prepare_generation_updates(
         self, request: CreateSpeechRequest
     ) -> SpeechRequestUpdates:
-        task_type = (
-            normalize_task_type(request.task_type)
-            if request.task_type is not None
-            else None
-        )
-        self.validate_input_text(request.input, task_type=task_type)
+        self.validate_input_text(request.input, task_type=request.task_type)
         updates: SpeechRequestUpdates = {}
         response_format = normalize_response_format(request.response_format)
         stream = request.stream or request.stream_format == "sse"
@@ -371,15 +346,12 @@ class SpeechRequestValidator:
         else:
             pass
 
-        if task_type is not None:
-            updates["task_type"] = task_type
+        if request.task_type is not None:
+            updates["task_type"] = self.normalize_task_type(request.task_type)
         else:
             pass
         self.validate_custom_voice_request(request, task_type=updates.get("task_type"))
-        if self.speech_extra_params_validator is not None:
-            self.speech_extra_params_validator(request.extra_params)
-        else:
-            pass
+        self.validate_extra_params(request)
         if request.language is not None:
             updates["language"] = self.normalize_language(request.language)
         else:
@@ -452,18 +424,7 @@ class SpeechRequestValidator:
     ) -> None:
         references = prepared_references.reference_descriptors
         required_count = self.required_speech_reference_count
-        if required_count == 0 and references:
-            raise bad_request(
-                "this model does not accept speech references",
-                param="ref_audio" if request.ref_audio is not None else "references",
-            )
-        else:
-            pass
-        if (
-            required_count is not None
-            and required_count > 0
-            and len(references) != required_count
-        ):
+        if required_count is not None and len(references) != required_count:
             count = "one" if required_count == 1 else str(required_count)
             param = "ref_audio" if not references else "references"
             raise bad_request(
@@ -552,13 +513,14 @@ class SpeechRequestValidator:
         )
 
     def resolve_encode_speed(self, request: CreateSpeechRequest) -> float:
-        """The encode-time speed factor; 1.0 when the model consumes speed
-        natively (an instruction), so the post-process must not double-apply."""
-        if self.speech_native_speed_control:
-            return 1.0
-        else:
-            pass
         return float(request.speed)
+
+    def validate_extra_params(self, request: CreateSpeechRequest) -> None:
+        """Override to validate model-owned parameters before dispatch."""
+
+    @staticmethod
+    def normalize_task_type(value: str) -> str:
+        return normalize_task_type(value)
 
     def build_generate_request(
         self,
@@ -813,7 +775,7 @@ class SpeechRequestValidator:
         else:
             pass
         task_type = (
-            normalize_task_type(batch.task_type)
+            self.normalize_task_type(batch.task_type)
             if batch.task_type is not None
             else None
         )
@@ -888,7 +850,7 @@ class SpeechRequestValidator:
             pass
         if uploaded_voice is not None:
             task_type = request.task_type
-            if task_type is not None and normalize_task_type(task_type) != "Base":
+            if task_type is not None and self.normalize_task_type(task_type) != "Base":
                 raise bad_request(
                     "uploaded voice requests require task_type='Base'",
                     param="task_type",

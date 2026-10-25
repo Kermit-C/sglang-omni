@@ -8,6 +8,7 @@ import time
 from typing import Protocol
 
 import torch
+from sglang.srt.models.registry import ModelRegistry
 from sglang.srt.runtime_context import get_exec, get_schedule
 from sglang.srt.server_args import ServerArgs
 from transformers import AutoTokenizer
@@ -135,6 +136,7 @@ class FireRedTTS3EngineBuilder(TtsEngineBuilder[FireRedTTS3SGLangRequestData]):
 
     def pre_infra_setup(self, checkpoint_dir: str) -> None:
         register_fireredtts3_hf_config()
+        ModelRegistry.models[FIREREDTTS3_MODEL_ARCH_OVERRIDE] = FireRedTTS3SGLangModel
 
     def generation_defaults(self, *, dtype: str) -> GenerationDefaults:
         return {

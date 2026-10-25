@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Literal
+from unittest import mock
 
 import pytest
 import torch
@@ -12,6 +13,7 @@ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
 import sglang_omni.models.firered_tts3.engine_builder as engine_builder_module
+from sglang_omni.model_runner.sglang_model_runner import SGLModelRunner
 from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
 from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
@@ -175,6 +177,61 @@ def test_weight_loading_finishes_before_execution_is_locked(
         model.load_weights(updates)
     assert next(updates)[0] == "dit.weight"
     assert torch.equal(model.dit.weight, initial)
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("source", ["disk", "tensor", "distributed"])
+def test_weight_update_policy_precedes_transport_and_loading(
+    loadable_model: FireRedTTS3SGLangModel,
+    source: Literal["disk", "tensor", "distributed"],
+    blocked: bool,
+) -> None:
+    """Cached execution must reject updates before receiving or loading replacement weights."""
+    runner = SGLModelRunner.__new__(SGLModelRunner)
+    runner.model = loadable_model
+    runner.weight_share_config = None
+    runner.model.weights_locked = blocked
+    before = {
+        name: tensor.clone() for name, tensor in runner.model.state_dict().items()
+    }
+    updater = mock.Mock()
+    runner.weight_updater = updater
+    weights = [("dit.weight", torch.zeros_like(loadable_model.dit.weight))]
+    if source == "distributed":
+        updater.receive_weights_from_distributed.return_value = weights
+        updater.load_weights_from_distributed.return_value = (True, "updated")
+        result = runner.update_weights_from_distributed(
+            ["dit.weight"], ["float32"], [[2, 2]], "group", load_format="direct"
+        )
+        if blocked:
+            assert result == (False, loadable_model.weight_update_blocked_reason)
+            assert updater.mock_calls == []
+        else:
+            assert result == (True, "updated")
+            assert updater.mock_calls == [
+                mock.call.receive_weights_from_distributed(
+                    names=["dit.weight"],
+                    dtypes=["float32"],
+                    shapes=[[2, 2]],
+                    group_name="group",
+                    load_format="direct",
+                ),
+                mock.call.load_weights_from_distributed(weights),
+            ]
+    else:
+        update = getattr(updater, f"update_weights_from_{source}")
+        update.return_value = (True, "updated")
+        result = getattr(runner, f"update_weights_from_{source}")(
+            "replacement", load_format="direct"
+        )
+        if blocked:
+            assert result == (False, loadable_model.weight_update_blocked_reason)
+            update.assert_not_called()
+        else:
+            assert result == (True, "updated")
+            update.assert_called_once_with("replacement", load_format="direct")
+    for name, tensor in runner.model.state_dict().items():
+        assert torch.equal(tensor, before[name])
 
 
 @pytest.mark.parametrize("compile_fails", [False, True])

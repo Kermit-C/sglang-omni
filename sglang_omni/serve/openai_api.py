@@ -79,7 +79,7 @@ from sglang_omni.config import (
     RealtimeTranscriptionConfig,
     ResolvedAudioChunking,
 )
-from sglang_omni.config.schema import MAX_SPEECH_INPUT_CHARS, SpeechExtraParamsValidator
+from sglang_omni.config.schema import MAX_SPEECH_INPUT_CHARS
 from sglang_omni.http.admin_auth import (
     make_admin_auth_dependency,
     resolve_admin_api_key,
@@ -230,9 +230,7 @@ def create_app(
     required_speech_reference_count: int | None = None,
     speech_reference_text_required: bool = False,
     speech_reference_text_excludes_instructions: bool = False,
-    speech_empty_input_task_types: frozenset[str] = frozenset(),
-    speech_native_speed_control: bool = False,
-    speech_extra_params_validator: SpeechExtraParamsValidator | None = None,
+    speech_request_validator_cls: type[SpeechRequestValidator] | None = None,
     additional_speech_languages: frozenset[str] = frozenset(),
     max_speech_input_chars: int | None = MAX_SPEECH_INPUT_CHARS,
     supported_speech_fields: frozenset[str] | None = None,
@@ -270,13 +268,7 @@ def create_app(
             a transcript.
         speech_reference_text_excludes_instructions: Whether a reference
             transcript and style instructions are mutually exclusive.
-        speech_empty_input_task_types: task_type values whose requests may
-            carry an empty input (edit tasks; the content rides the reference
-            audio).
-        speech_native_speed_control: Whether the model consumes the speed
-            field natively (the serving layer then skips the encode-time
-            speed post-process).
-        speech_extra_params_validator: Model-owned validation of extra speech parameters.
+        speech_request_validator_cls: Model-specific speech validation and encoding policy.
         additional_speech_languages: Pipeline-specific accepted languages.
         max_speech_input_chars: Maximum accepted input characters, or ``None``
             to defer length validation to model-specific context checks.
@@ -339,7 +331,7 @@ def create_app(
     app.state.speech_stream_outcomes = SpeechStreamOutcomes(
         max_entries=MAX_SPEECH_STREAM_OUTCOMES
     )
-    app.state.speech_service = SpeechRequestValidator(
+    app.state.speech_service = (speech_request_validator_cls or SpeechRequestValidator)(
         default_model=app.state.model_name,
         custom_voice_config=custom_voice_config,
         requires_uploaded_voice_for_named_voice=(
@@ -351,9 +343,6 @@ def create_app(
         speech_reference_text_excludes_instructions=(
             speech_reference_text_excludes_instructions
         ),
-        speech_empty_input_task_types=speech_empty_input_task_types,
-        speech_native_speed_control=speech_native_speed_control,
-        speech_extra_params_validator=speech_extra_params_validator,
         additional_speech_languages=additional_speech_languages,
         max_speech_input_chars=max_speech_input_chars,
         supported_speech_fields=supported_speech_fields,

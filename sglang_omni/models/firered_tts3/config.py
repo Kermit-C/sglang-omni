@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import ClassVar, TypedDict
 
 from pydantic import Field
@@ -13,17 +11,20 @@ from sglang_omni.config.schema import (
     EngineStageConfig,
     FactoryArgs,
     PipelineConfig,
-    SpeechExtraParamsValidator,
     StageConfig,
 )
 from sglang_omni.models.firered_tts3.flow_graph import FlowMode
 from sglang_omni.models.firered_tts3.hf_config import (
-    FireRedTTS3Config,
     FireRedTTS3Variant,
     detect_fireredtts3_variant,
+    load_checkpoint_hf_config,
 )
+from sglang_omni.serve.protocol import SUPPORTED_TTS_TASK_TYPES, CreateSpeechRequest
 from sglang_omni.serve.speech_errors import bad_request
-from sglang_omni.utils.json import JsonValue
+from sglang_omni.serve.speech_service import (
+    PreparedSpeechReferences,
+    SpeechRequestValidator,
+)
 
 PACKAGE_PATH = "sglang_omni.models.firered_tts3"
 
@@ -112,17 +113,6 @@ class FireRedTTS3VocoderStageConfig(StageConfig):
     )
 
 
-def load_checkpoint_hf_config(model_path: str) -> FireRedTTS3Config | None:
-    """Read the checkpoint config.json for local paths; None when unreadable."""
-    config_path = Path(model_path).expanduser() / "config.json"
-    if not config_path.is_file():
-        return None
-    else:
-        pass
-    with config_path.open(encoding="utf-8") as handle:
-        return FireRedTTS3Config(**json.load(handle))
-
-
 class FireRedTTS3PipelineConfig(PipelineConfig):
     """Build checkpoint-specific stages and derive their shared limits."""
 
@@ -132,10 +122,6 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
         "fireredtts3",
         "firered_tts3",
     )
-    speech_empty_input_task_types: ClassVar[frozenset[str]] = frozenset(
-        {"SemanticEdit", "AcousticEdit"}
-    )
-    speech_native_speed_control: ClassVar[bool] = True
 
     stage_config_types: ClassVar[dict[str, type[StageConfig]]] = {
         "talker": EngineStageConfig,
@@ -179,47 +165,16 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
 
     @property
     def required_speech_reference_count(self) -> int | None:
-        if self.variant == "speaker":
-            return 0
-        else:
-            pass
-        return None if self.variant == "instruct" else 1
+        return None if self.variant in ("instruct", "speaker") else 1
 
     @property
-    def speech_extra_params_validator(self) -> SpeechExtraParamsValidator:
-        return self.validate_speech_extra_params
-
-    def validate_speech_extra_params(
-        self, extra_params: dict[str, JsonValue] | None
-    ) -> None:
-        if extra_params is None:
-            return
-        else:
-            pass
-        if "dual_stream" in extra_params:
-            if not isinstance(extra_params["dual_stream"], bool):
-                raise bad_request(
-                    "extra_params.dual_stream must be a boolean", param="extra_params"
-                )
-            elif extra_params["dual_stream"] and self.variant != "speaker":
-                raise bad_request(
-                    "extra_params.dual_stream requires a dual-stream-capable "
-                    "checkpoint (this deployment does not support it)",
-                    param="extra_params",
-                )
-            else:
-                pass
-        else:
-            pass
-        if "style" in extra_params and extra_params["style"] is not None:
-            if not isinstance(extra_params["style"], str):
-                raise bad_request(
-                    "extra_params.style must be a string", param="extra_params"
-                )
-            else:
-                pass
-        else:
-            pass
+    def speech_request_validator_factory(self) -> str:
+        validator = (
+            "FireRedTTS3SpeakerSpeechRequestValidator"
+            if self.variant == "speaker"
+            else "FireRedTTS3SpeechRequestValidator"
+        )
+        return f"{PACKAGE_PATH}.config.{validator}"
 
     @property
     def speech_reference_text_required(self) -> bool:
@@ -356,6 +311,90 @@ class FireRedTTS3PipelineConfig(PipelineConfig):
 
     def supports_uploaded_voice_references(self) -> bool:
         return True
+
+
+class FireRedTTS3SpeechRequestValidator(SpeechRequestValidator):
+    """Apply native editing, speed and checkpoint parameter rules at the API boundary."""
+
+    supports_dual_stream: ClassVar[bool] = False
+
+    @staticmethod
+    def normalize_task_type(value: str) -> str:
+        supported = SUPPORTED_TTS_TASK_TYPES | {"SemanticEdit", "AcousticEdit"}
+        normalized = value.strip().replace("_", "").replace("-", "").lower()
+        for task_type in supported:
+            if normalized == task_type.lower():
+                return task_type
+            else:
+                pass
+        raise bad_request(
+            f"task_type must be one of: {', '.join(sorted(supported))}",
+            param="task_type",
+        )
+
+    def validate_input_text(
+        self, input_text: str, *, task_type: str | None = None
+    ) -> None:
+        task_type = (
+            self.normalize_task_type(task_type) if task_type is not None else None
+        )
+        if (
+            task_type in {"SemanticEdit", "AcousticEdit"}
+            and isinstance(input_text, str)
+            and not input_text.strip()
+        ):
+            return
+        else:
+            super().validate_input_text(input_text, task_type=task_type)
+
+    def validate_extra_params(self, request: CreateSpeechRequest) -> None:
+        extra_params = request.extra_params or {}
+        if "dual_stream" in extra_params:
+            if not isinstance(extra_params["dual_stream"], bool):
+                raise bad_request(
+                    "extra_params.dual_stream must be a boolean", param="extra_params"
+                )
+            elif extra_params["dual_stream"] and not self.supports_dual_stream:
+                raise bad_request(
+                    "extra_params.dual_stream requires a dual-stream-capable "
+                    "checkpoint (this deployment does not support it)",
+                    param="extra_params",
+                )
+            else:
+                pass
+        else:
+            pass
+        if extra_params.get("style") is not None and not isinstance(
+            extra_params["style"], str
+        ):
+            raise bad_request(
+                "extra_params.style must be a string", param="extra_params"
+            )
+        else:
+            pass
+
+    def resolve_encode_speed(self, request: CreateSpeechRequest) -> float:
+        # note (kermit): FireRed consumes speed natively; encode-time resampling would apply it twice.
+        return 1.0
+
+
+class FireRedTTS3SpeakerSpeechRequestValidator(FireRedTTS3SpeechRequestValidator):
+    """Speaker checkpoints use speaker tokens and cannot consume reference audio."""
+
+    supports_dual_stream: ClassVar[bool] = True
+
+    def validate_speech_references(
+        self,
+        request: CreateSpeechRequest,
+        prepared_references: PreparedSpeechReferences,
+    ) -> None:
+        if prepared_references.reference_descriptors:
+            raise bad_request(
+                "this model does not accept speech references",
+                param="ref_audio" if request.ref_audio is not None else "references",
+            )
+        else:
+            super().validate_speech_references(request, prepared_references)
 
 
 EntryClass = FireRedTTS3PipelineConfig

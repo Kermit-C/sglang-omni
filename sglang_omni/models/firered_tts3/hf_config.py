@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Literal
 
 from transformers import AutoConfig, PretrainedConfig
@@ -12,6 +14,17 @@ from sglang_omni.utils.json import JsonValue
 
 FIREREDTTS3_MODEL_ARCH_OVERRIDE = "FireRedTTS3ForConditionalGeneration"
 FireRedTTS3Variant = Literal["base", "instruct", "speaker"]
+
+
+def load_checkpoint_hf_config(model_path: str) -> FireRedTTS3Config | None:
+    """Read a local checkpoint config, or defer detection for non-local paths."""
+    config_path = Path(model_path).expanduser() / "config.json"
+    if not config_path.is_file():
+        return None
+    else:
+        pass
+    with config_path.open(encoding="utf-8") as handle:
+        return FireRedTTS3Config(**json.load(handle))
 
 
 class FireRedTTS3Config(PretrainedConfig):
