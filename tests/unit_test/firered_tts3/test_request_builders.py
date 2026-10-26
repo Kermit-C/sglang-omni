@@ -41,32 +41,47 @@ def build(state: FireRedTTS3State) -> FireRedTTS3SGLangRequestData:
     )
 
 
-def test_request_layout_is_speaker_plus_text_plus_prompt_patches() -> None:
-    state = FireRedTTS3State(
-        input_ids=[11, 22, 33],
-        prompt_latents=torch.zeros(1, 8, 64),
-        max_patches=400,
-        max_engine_tokens=420,
-    )
+@pytest.mark.parametrize(
+    "state,prefill_token_count,prompt_patch_count,engine_token_budget",
+    [
+        pytest.param(
+            FireRedTTS3State(
+                input_ids=[11, 22, 33],
+                prompt_latents=torch.zeros(1, 8, 64),
+                max_patches=400,
+                max_engine_tokens=420,
+            ),
+            6,
+            2,
+            420,
+            id="explicit-budget",
+        ),
+        pytest.param(
+            FireRedTTS3State(input_ids=[11], max_patches=250),
+            2,
+            0,
+            270,
+            id="fallback-budget",
+        ),
+    ],
+)
+def test_request_layout_is_speaker_plus_text_plus_prompt_patches(
+    state: FireRedTTS3State,
+    prefill_token_count: int,
+    prompt_patch_count: int,
+    engine_token_budget: int,
+) -> None:
     request_data = build(state)
-    # 1 speaker slot + 3 text tokens + 2 prompt-patch slots.
-    assert request_data.prefill_len == 6
-    assert request_data.prompt_patch_count == 2
-    assert request_data.req.origin_input_ids == [CONTROL_TOKEN_ID] * 6
-    assert request_data.req.sampling_params.max_new_tokens == 420
+    assert request_data.prefill_len == prefill_token_count
+    assert request_data.prompt_patch_count == prompt_patch_count
+    assert request_data.req.origin_input_ids == [CONTROL_TOKEN_ID] * prefill_token_count
+    assert request_data.max_new_tokens == engine_token_budget
+    assert request_data.req.sampling_params.max_new_tokens == engine_token_budget
     # temperature=0.0 normalizes to the greedy convention (top_k == 1).
     assert request_data.req.sampling_params.top_k == 1
     assert request_data.req.sampling_params.stop_token_ids in (None, [])
     assert request_data.req.eos_token_ids == set()
     assert request_data.input_embeds_are_projected is True
-
-
-def test_request_budget_defaults_to_max_patches_plus_slack() -> None:
-    state = FireRedTTS3State(input_ids=[11], max_patches=250)
-    request_data = build(state)
-    assert request_data.prefill_len == 2
-    assert request_data.prompt_patch_count == 0
-    assert request_data.max_new_tokens == 250 + 20
 
 
 def test_request_rejects_missing_or_misaligned_inputs() -> None:

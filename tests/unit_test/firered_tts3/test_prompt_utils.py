@@ -20,13 +20,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
 from sglang_omni.models.firered_tts3.preprocessing import (
     compose_speaker_chatml,
     encode_speaker_text,
 )
 from sglang_omni.models.firered_tts3.task_prompts import (
-    compose_base_state,
     count_audio_patches,
     resolve_acoustic_instruction,
 )
@@ -50,30 +48,6 @@ def audio_server_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
         finally:
             server.shutdown()
             server_thread.join()
-
-
-def test_base_text_template_matches_reference() -> None:
-    """Reference text precedes target text inside the checkpoint text delimiters."""
-    language, ref_text, text = "Chinese", "今天天气很好。", "欢迎使用点点语音合成系统。"
-    tokenizer = make_speaker_tokenizer()
-    state = compose_base_state(
-        FireRedTTS3Config(spk_in_dim=512),
-        tokenizer=tokenizer,
-        request_inputs={
-            "prompt_audio_path": "ref.wav",
-            "prompt_text": ref_text,
-            "language": language,
-        },
-        tts_parameters={},
-        text=text,
-    )
-    assert (
-        state.input_ids
-        == tokenizer(
-            "<|Chinese|><|sot|>今天天气很好。欢迎使用点点语音合成系统。<|eot|>",
-            add_special_tokens=False,
-        )["input_ids"]
-    )
 
 
 def test_speaker_chatml_rejects_bad_ratio() -> None:

@@ -2,7 +2,11 @@
 """Preprocessing stage: Base template composition, budgets, validation."""
 from __future__ import annotations
 
+from pathlib import Path
+
+import numpy as np
 import pytest
+import soundfile as sf
 from transformers import PreTrainedTokenizerFast
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
@@ -124,13 +128,15 @@ def instruct_payload(
     task_type: str | None = None,
     instructions: str | None = None,
     text: str = "晚上好，欢迎收听今天的节目。",
-    with_reference: bool = False,
+    reference_audio_path: str | None = None,
     params: dict[str, JsonValue] | None = None,
     tts_params: dict[str, JsonValue] | None = None,
 ) -> StagePayload:
     inputs: dict[str, JsonValue] = {"text": text}
-    if with_reference:
-        inputs["references"] = [{"audio_path": "edit.wav", "text": "源音频文本。"}]
+    if reference_audio_path is not None:
+        inputs["references"] = [
+            {"audio_path": reference_audio_path, "text": "源音频文本。"}
+        ]
     else:
         pass
     if instructions is not None:
@@ -144,7 +150,6 @@ def instruct_payload(
     return make_payload(inputs=inputs, params=params or {}, tts_params=tts_params)
 
 
-@pytest.mark.usefixtures("audio_patch_count")
 def test_instruct_task_validation() -> None:
     with pytest.raises(ValueError, match="task_type"):
         preprocess(instruct_payload(task_type="Base2"), config=INSTRUCT_CONFIG)
@@ -177,7 +182,6 @@ def test_instruct_task_validation() -> None:
         ({"top_p": 0.5, "top_k": 5}, (0.7, 0.5, 5)),
     ],
 )
-@pytest.mark.usefixtures("audio_patch_count")
 def test_instruct_explicit_sampling_overrides_task_default(
     sampling_overrides: dict[str, float | int],
     expected_sampling: tuple[float, float, int],
@@ -227,31 +231,53 @@ def speaker_payload(
     )
 
 
-@pytest.mark.parametrize("dual_stream,budget", [(False, 620), (True, 1820)])
+@pytest.mark.parametrize(
+    "text,request_parameters,engine_token_budget",
+    [
+        ("你 好", {"dual_stream": False}, 620),
+        ("你 好", {"dual_stream": True}, 1820),
+        (
+            "晚上好，欢迎收听今天的节目。",
+            {"dual_stream": True, "max_new_tokens": 300},
+            300,
+        ),
+    ],
+)
 def test_speaker_preprocessing_composes_prompt_and_budget(
-    dual_stream: bool, budget: int
+    text: str, request_parameters: dict[str, JsonValue], engine_token_budget: int
 ) -> None:
     tokenizer = make_speaker_tokenizer()
+    payload = speaker_payload(inputs={"text": text}, params=request_parameters)
     state = preprocess(
-        speaker_payload(inputs={"text": "你 好"}, params={"dual_stream": dual_stream}),
+        payload,
         tokenizer=tokenizer,
         config=SPEAKER_CONFIG,
         max_patches=600,
     )
+    request = build_sglang_firered_tts3_request(
+        payload,
+        patch_size=4,
+        vocab_size=151936,
+        interleave_ratio=tuple(SPEAKER_CONFIG.text_latent_interleave_ratio),
+    )
+    assert request.max_new_tokens == engine_token_budget
+    assert request.req.sampling_params.max_new_tokens == engine_token_budget
+    dual_stream = request_parameters["dual_stream"]
+    spoken_text = text.replace(" ", "")
     assert state.variant == "speaker"
     assert state.task_type == "tts"
     assert state.dual_stream is dual_stream
     assert state.inference_cfg == 1.2
-    assert state.max_engine_tokens == budget
+    assert state.max_engine_tokens == engine_token_budget
     assert state.max_patches == 600
     if dual_stream:
         user_prompt = "Use a中性 tone. Align the interleaved text and speech chunks."
         assert state.text_stream_ids == [
-            tokenizer.convert_tokens_to_ids(char) for char in "你好"
+            tokenizer.convert_tokens_to_ids(char) for char in spoken_text
         ]
         assert state.text_pad_id == tokenizer.convert_tokens_to_ids("<|text_pad|>")
     else:
-        user_prompt = "Convert text to speech.\n你好"
+        user_prompt = f"Convert text to speech.\n{spoken_text}"
         assert state.text_stream_ids == []
         assert state.text_pad_id == -1
     expected = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<|f531_speaker|><|audio_start|>"
@@ -314,15 +340,6 @@ def test_speaker_rejects_references_and_foreign_tasks() -> None:
         )
 
 
-def test_speaker_max_new_tokens_override() -> None:
-    state = preprocess(
-        speaker_payload(params={"dual_stream": True, "max_new_tokens": 300}),
-        config=SPEAKER_CONFIG,
-        max_patches=600,
-    )
-    assert state.max_engine_tokens == 300
-
-
 @pytest.mark.parametrize(
     "task,instructions,params,tts_params,user_instruction,engine_tokens,sampling",
     [
@@ -380,8 +397,8 @@ def test_speaker_max_new_tokens_override() -> None:
         ),
     ],
 )
-@pytest.mark.usefixtures("audio_patch_count")
 def test_instruct_preprocessing_routes_tasks_to_model_prompts(
+    tmp_path: Path,
     task: str,
     instructions: str | None,
     params: dict[str, JsonValue],
@@ -390,25 +407,25 @@ def test_instruct_preprocessing_routes_tasks_to_model_prompts(
     engine_tokens: int,
     sampling: tuple[float, float | None, int | None],
 ) -> None:
+    audio_path = str(tmp_path / "edit.wav")
+    sf.write(audio_path, np.zeros(69120, dtype=np.float32), 24000, subtype="FLOAT")
     is_edit = task in ("SemanticEdit", "AcousticEdit")
     tokenizer = make_speaker_tokenizer()
-    serialized_state = preprocess(
+    state = preprocess(
         instruct_payload(
             task_type=None if task == "tts" else task,
             instructions=instructions,
             text="" if is_edit else "晚上好，欢迎收听今天的节目。",
-            with_reference=task != "VoiceDesign",
+            reference_audio_path=audio_path if task != "VoiceDesign" else None,
             params=params,
             tts_params=tts_params,
         ),
         tokenizer=tokenizer,
         config=INSTRUCT_CONFIG,
     )
-    state = serialized_state
     audio_input = "<|sosp|>" + "<|image_pad|>" * 18 + "<|eosp|>\n" if is_edit else ""
     if task == "tts":
         assistant_prefix = "<|sosp|>" + "<|video_pad|>" * 18
-        assert state.prompt_audio_path == "edit.wav"
         assert state.prompt_text == "源音频文本。"
     elif task == "AcousticEdit":
         assistant_prefix = "<|sosp|>"
@@ -426,16 +443,8 @@ def test_instruct_preprocessing_routes_tasks_to_model_prompts(
             "AcousticEdit": "acoustic_edit",
         }[task]
     )
-    assert state.audio_in_path == ("edit.wav" if is_edit else None)
-    assert state.prompt_audio_path == ("edit.wav" if task == "tts" else None)
+    assert state.audio_in_path == (audio_path if is_edit else None)
+    assert state.prompt_audio_path == (audio_path if task == "tts" else None)
     assert state.inference_cfg == (2.0 if task == "tts" else 1.2)
     assert state.max_engine_tokens == engine_tokens
     assert (state.text_temperature, state.text_top_p, state.text_top_k) == sampling
-
-
-@pytest.fixture
-def audio_patch_count(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "sglang_omni.models.firered_tts3.task_prompts.count_audio_patches",
-        lambda path, *, cap_seconds: 18,
-    )

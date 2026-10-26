@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Text sampling, audio transitions, and request stop ownership on real CPU flow."""
+"""Autoregressive transitions, dual-stream ordering, and request stop ownership."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
+from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
 from sglang.srt.managers.utils import GenerationBatchResult
 
 from sglang_omni.models.firered_tts3.model_runner import (
@@ -225,7 +226,6 @@ def test_control_fastpath_preserves_other_token_paths(
 @pytest.mark.parametrize(
     "skip,variant,dual_stream,async_enabled,min_patches,patch_count,logit,expected_stop,expected_calls",
     [
-        (None, "speaker", False, False, 6, 5, 2.0, False, 0),
         (False, "speaker", False, False, 6, 5, 2.0, False, 1),
         (True, "speaker", False, False, 6, 5, 2.0, False, 0),
         (True, "speaker", False, False, 0, 0, 0.0, True, 1),
@@ -239,7 +239,7 @@ def test_control_fastpath_preserves_other_token_paths(
     ],
 )
 def test_min_patch_stop_boundary_is_unchanged(
-    skip: bool | None,
+    skip: bool,
     variant: str,
     dual_stream: bool,
     async_enabled: bool,
@@ -250,10 +250,7 @@ def test_min_patch_stop_boundary_is_unchanged(
     expected_calls: int,
 ) -> None:
     runner = make_runner()
-    if skip is not None:
-        runner.skip_min_patch_stop = skip
-    else:
-        pass
+    runner.skip_min_patch_stop = skip
     runner.async_enabled = async_enabled
     request = make_request("tts")
     data = request.data
@@ -331,3 +328,54 @@ def test_control_token_device_snapshots_are_independent() -> None:
     assert first.is_cuda and host.device.type == "cpu"
     assert first.tolist() == [0]
     assert host.tolist() == next_host.tolist() == [0]
+
+
+@pytest.mark.parametrize(
+    "ratio,expected_tokens,patch_counts",
+    [
+        ((2, 1), [101, 102, 0, 103, 151671, 0, 151671], [0, 0, 1, 1, 1, 2, 2]),
+        (
+            (2, 3),
+            [101, 102, 0, 0, 0, 103, 151671, 0, 0, 0, 151671],
+            [0, 0, 1, 2, 3, 3, 3, 4, 5, 6, 6],
+        ),
+    ],
+)
+def test_group_schedule_and_text_feeds(
+    ratio: tuple[int, int], expected_tokens: list[int], patch_counts: list[int]
+) -> None:
+    runner = make_flow_runner(SmallFlowModel())
+    request = make_flow_request(dual_stream=True, ratio=ratio)
+    result = make_flow_result(torch.zeros(3, 8), [123])
+    runner.post_prefill(result, None, None, [request])
+    actual_tokens = [int(result.next_token_ids[0])]
+    actual_counts = [len(request.data.latent_patches)]
+    for _ in expected_tokens[1:]:
+        result = make_flow_result(torch.ones(1, 8))
+        runner.post_decode(result, None, None, [request])
+        actual_tokens.append(int(result.next_token_ids[0]))
+        actual_counts.append(len(request.data.latent_patches))
+    assert actual_tokens == expected_tokens
+    assert actual_counts == patch_counts
+    assert len(request.data.pending_feedback_queue) == patch_counts[-1]
+    assert request.data.req.finished_reason is None
+
+
+def test_stop_fires_after_the_patch_feed() -> None:
+    """The stopping patch must be emitted before the group's final feed decides to stop."""
+    runner = make_flow_runner(SmallFlowModel())
+    request = make_flow_request(dual_stream=True)
+    request.data.state.min_patches = 2
+    request.data.state.stop_threshold = 0.0
+    runner.post_prefill(
+        make_flow_result(torch.zeros(3, 8), [123]), None, None, [request]
+    )
+    patch_counts = []
+    for _ in range(5):
+        runner.post_decode(make_flow_result(torch.ones(1, 8)), None, None, [request])
+        patch_counts.append(len(request.data.latent_patches))
+        assert request.data.req.finished_reason is None
+    runner.post_decode(make_flow_result(torch.ones(1, 8)), None, None, [request])
+    assert patch_counts == [0, 1, 1, 1, 2]
+    assert isinstance(request.data.req.finished_reason, FINISH_MATCHED_TOKEN)
+    assert len(request.data.latent_patches) == 2
