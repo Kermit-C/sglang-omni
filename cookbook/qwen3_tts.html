@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Qwen3 TTS &#8212; SGLang</title>
+    <title>Qwen3-TTS &#8212; SGLang</title>
   
   
   
@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=c52cfe39"></script>
+    <script src="../_static/documentation_options.js?v=7f7c277e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -60,8 +60,8 @@
     <link rel="prev" title="Troubleshooting" href="../get_started/troubleshooting.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.9" />
-    <meta name="docbuild:last-update" content="Oct 23, 2026"/>
+  <meta name="docsearch:version" content="0.2.0" />
+    <meta name="docbuild:last-update" content="Oct 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -208,7 +208,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation — CUDA</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Installation — Apple Silicon</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — NPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Installation — Intel XPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Installation — Intel CPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Installation — MUSA</a></li>
@@ -216,10 +216,12 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Qwen3 TTS</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Qwen3-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="whisper_asr.html">Whisper ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron3_5_asr.html">Nemotron 3.5 ASR</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_transcribe.html">Nemotron Transcribe</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_transcribe_diarize.html">MOSS-Transcribe-Diarize</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_cosyvoice3.html">Fun-CosyVoice3</a></li>
@@ -231,7 +233,6 @@
 <li class="toctree-l1"><a class="reference internal" href="minicpm_o.html">MiniCPM-o</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_asr.html">Fun-ASR-Nano</a></li>
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
-<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="minimax_music3.html">MiniMax Music 3</a></li>
@@ -239,6 +240,7 @@
 <li class="toctree-l1"><a class="reference internal" href="auk.html">AuK</a></li>
 <li class="toctree-l1"><a class="reference internal" href="zonos2.html">ZONOS2</a></li>
 <li class="toctree-l1"><a class="reference internal" href="arkasr.html">ARK-ASR-3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hy_simulmt.html">Hy-SimulMT</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dots_tts.html">dots.tts</a></li>
 <li class="toctree-l1"><a class="reference internal" href="llada2_uni.html">LLaDA2.0-Uni</a></li>
@@ -269,15 +271,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/main.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_interactive_model.html">Full Duplex Interactive Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/adding_parameters.html">Adding a Parameter</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_guide.html">Full-Duplex Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
@@ -508,7 +508,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Qwen3 TTS</h1>
+    <h1>Qwen3-TTS</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -532,6 +532,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#synthesizing-speech">Synthesizing Speech</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#text-only-requests">Text-only Requests</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#voice-cloning">Voice Cloning</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#precomputed-speaker-embedding">Precomputed Speaker Embedding</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#language-hint">Language Hint</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#streaming">Streaming</a></li>
 </ul>
@@ -542,6 +543,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-results">Benchmark Results</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#b-base">0.6B Base</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#b-customvoice">1.7B CustomVoice</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#runaway-regression">Runaway Regression</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known Limitations</a></li>
@@ -557,7 +559,7 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="qwen3-tts">
-<h1>Qwen3 TTS<a class="headerlink" href="#qwen3-tts" title="Link to this heading">#</a></h1>
+<h1>Qwen3-TTS<a class="headerlink" href="#qwen3-tts" title="Link to this heading">#</a></h1>
 <p><a class="reference external" href="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base">Qwen3-TTS-12Hz-Base</a> is a discrete
 multi-codebook text-to-speech model from the Qwen team. It performs fast voice cloning from a
 short reference clip, supports 10 languages, and streams 24 kHz speech with low latency. The
@@ -987,6 +989,48 @@ from the unmasked model. To turn it off:</p>
 </pre></div>
 </div>
 </section>
+<section id="precomputed-speaker-embedding">
+<h3>Precomputed Speaker Embedding<a class="headerlink" href="#precomputed-speaker-embedding" title="Link to this heading">#</a></h3>
+<p>A Base reference can be given as its speaker embedding, <code class="docutils literal notranslate"><span class="pre">references[0].speaker_embedding</span></code>, instead of its clip. The server then loads and encodes no audio, and every replica serves every voice without stored voice state.</p>
+<p>The embedding is the x-vector the checkpoint’s speaker encoder computes from a reference clip: 1024 values for 0.6B Base and 2048 for 1.7B Base. An embedding from one checkpoint size does not fit the other. Sending the embedding the server computes for a clip produces the same audio as sending that clip with <code class="docutils literal notranslate"><span class="pre">x_vector_only_mode:</span> <span class="pre">true</span></code>, including the x-vector leading-silence mask above.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">qwen-tts</span></code> package computes it. Install it in its own Python environment (<code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">qwen-tts</span></code>), since it pins an older transformers release than the server. On SeedTTS EN references its embeddings match the server’s to bfloat16 rounding (cosine above 0.99999 on 100 references for each size).</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">qwen_tts</span><span class="w"> </span><span class="kn">import</span> <span class="n">Qwen3TTSModel</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">Qwen3TTSModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span>
+    <span class="s2">"Qwen/Qwen3-TTS-12Hz-0.6B-Base"</span><span class="p">,</span> <span class="n">device_map</span><span class="o">=</span><span class="s2">"cuda:0"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span>
+<span class="p">)</span>
+<span class="p">(</span><span class="n">prompt</span><span class="p">,)</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">create_voice_clone_prompt</span><span class="p">(</span>
+    <span class="n">ref_audio</span><span class="o">=</span><span class="s2">"reference.wav"</span><span class="p">,</span> <span class="n">x_vector_only_mode</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"speaker_embedding.json"</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">prompt</span><span class="o">.</span><span class="n">ref_spk_embedding</span><span class="o">.</span><span class="n">float</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span> <span class="n">f</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Then send the stored embedding with the text:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+
+<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"speaker_embedding.json"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="n">speaker_embedding</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+<span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
+    <span class="s2">"http://localhost:8000/v1/audio/speech"</span><span class="p">,</span>
+    <span class="n">json</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"Qwen/Qwen3-TTS-12Hz-0.6B-Base"</span><span class="p">,</span>
+        <span class="s2">"input"</span><span class="p">:</span> <span class="s2">"Get the trust fund to the bank early."</span><span class="p">,</span>
+        <span class="s2">"references"</span><span class="p">:</span> <span class="p">[{</span><span class="s2">"speaker_embedding"</span><span class="p">:</span> <span class="n">speaker_embedding</span><span class="p">}],</span>
+    <span class="p">},</span>
+<span class="p">)</span>
+<span class="n">resp</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"output.wav"</span><span class="p">,</span> <span class="s2">"wb"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">content</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The request runs in x-vector mode. A transcript is not used, and <code class="docutils literal notranslate"><span class="pre">x_vector_only_mode</span></code> may be omitted or set to <code class="docutils literal notranslate"><span class="pre">true</span></code>. The embedding reference must be the only reference, with no audio, no <code class="docutils literal notranslate"><span class="pre">vq_codes</span></code> and no <code class="docutils literal notranslate"><span class="pre">ref_audio</span></code>, and every value must be finite in the model’s dtype. CustomVoice and VoiceDesign checkpoints reject it.</p>
+</section>
 <section id="language-hint">
 <h3>Language Hint<a class="headerlink" href="#language-hint" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">language</span></code> biases the model toward a target language. It defaults to <code class="docutils literal notranslate"><span class="pre">auto</span></code> (let the model
@@ -1141,7 +1185,7 @@ only the first chunk.</p>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">references</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
-<td><p>Reference clip for cloning. Each item has <code class="docutils literal notranslate"><span class="pre">audio_path</span></code> and <code class="docutils literal notranslate"><span class="pre">text</span></code></p></td>
+<td><p>Reference clip for cloning. Each item has <code class="docutils literal notranslate"><span class="pre">audio_path</span></code> and <code class="docutils literal notranslate"><span class="pre">text</span></code>, or only <code class="docutils literal notranslate"><span class="pre">speaker_embedding</span></code>: the checkpoint’s speaker-encoder x-vector of the clip, 1024 values for 0.6B Base and 2048 for 1.7B Base. See <a class="reference internal" href="#precomputed-speaker-embedding"><span class="std std-ref">Precomputed Speaker Embedding</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ref_audio</span></code> / <code class="docutils literal notranslate"><span class="pre">ref_text</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
@@ -1168,8 +1212,8 @@ only the first chunk.</p>
 <td><p>Repetition penalty</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
-<td><p>Maximum number of generated codec tokens</p></td>
+<td><p>Twice the slowest natural stop for the target text, at most <code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
+<td><p>Maximum number of generated codec tokens (80 ms each). The default is <code class="docutils literal notranslate"><span class="pre">ceil(2</span> <span class="pre">×</span> <span class="pre">(1.38</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">0.39</span> <span class="pre">s</span> <span class="pre">×</span> <span class="pre">target-text</span> <span class="pre">tokens)</span> <span class="pre">×</span> <span class="pre">12.5)</span></code>: about 5 s for a three-token word, 26 s for 30 tokens, 2048 for long text. Set it for speech deliberately slower than natural</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">seed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
@@ -1386,6 +1430,32 @@ latency for quality.</p>
 <p>Corpus WER (EN) / CER (ZH) is total edit distance divided by total reference words / characters and includes every sample. The filtered row excludes samples whose own WER/CER exceeds 50% and recomputes the corpus rate. UTMOS is the mean predicted audio-quality score, not a listening-test score. These independently sampled runs are not a paired comparison of streaming and non-streaming quality; the Base result also uses different conditioning and a different ASR evaluator.</p>
 <p>TTFA measures arrival of the first PCM payload, not the first audible speech; its mean payload duration was 80 ms in both languages. All 3,108 streaming requests were continuity-scored: 98.99% EN and 93.76% ZH had no playback underrun longer than 50 ms. Maximum underrun was 396.1 ms EN and 2072.0 ms ZH. The default ramp therefore does not guarantee uninterrupted playback at concurrency 16; see First-audio chunk ramp for the buffering tradeoff.</p>
 </section>
+<section id="runaway-regression">
+<h3>Runaway Regression<a class="headerlink" href="#runaway-regression" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">benchmarks.eval.benchmark_tts_generation_budget</span></code> sends each case twice with the same text, voice, and seed: once with the legacy 2048-frame limit and once with the server default. It saves the audio, finish reasons, codec frame counts, and chunk timings. The text request fails only when it stops on <code class="docutils literal notranslate"><span class="pre">length</span></code> before its paired baseline stopped naturally.</p>
+<p>Create a request template, for example <code class="docutils literal notranslate"><span class="pre">request.json</span></code>:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"input"</span><span class="p">:</span><span class="w"> </span><span class="s2">"replaced by each case"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"voice"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Ryan"</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>For Base, use a fixed <code class="docutils literal notranslate"><span class="pre">references</span></code> entry instead of a built-in voice. The probe sends four built-in short lines in English and Chinese; <code class="docutils literal notranslate"><span class="pre">--cases</span></code> takes a JSON list of your own, and <code class="docutils literal notranslate"><span class="pre">--seedtts-samples</span></code> probes the SeedTTS prompts that missed codec EOS on 0.6B Base in #1179.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>benchmarks.eval.benchmark_tts_generation_budget<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--base-url<span class="w"> </span>http://127.0.0.1:8000/v1<span class="w"> </span>--request<span class="w"> </span>request.json<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--server-revision<span class="w"> </span>&lt;server-git-sha&gt;<span class="w"> </span>--model-revision<span class="w"> </span>&lt;checkpoint-sha&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repeats<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">0</span><span class="w"> </span>--output-dir<span class="w"> </span>results/budget-nonstream
+
+python<span class="w"> </span>-m<span class="w"> </span>benchmarks.eval.benchmark_tts_generation_budget<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--base-url<span class="w"> </span>http://127.0.0.1:8000/v1<span class="w"> </span>--request<span class="w"> </span>base-request.json<span class="w"> </span>--seedtts-samples<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--server-revision<span class="w"> </span>&lt;server-git-sha&gt;<span class="w"> </span>--model-revision<span class="w"> </span>&lt;checkpoint-sha&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repeats<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">123</span><span class="w"> </span>--output-dir<span class="w"> </span>results/budget-runaway
+</pre></div>
+</div>
+<p>Add <code class="docutils literal notranslate"><span class="pre">--stream</span></code> to check raw PCM streams. Output directories must be new. A fixed seed does not make waveforms bitwise identical because prefix-cache state and batch composition can change between requests.</p>
+<p>The TTS CI non-streaming and streaming stages run this probe for Qwen3-TTS on four short cases with eight seeds, 64 requests per stage, and upload <code class="docutils literal notranslate"><span class="pre">results.jsonl</span></code> with the audio of the pairs that failed.</p>
+</section>
 </section>
 <section id="known-limitations">
 <h2>Known Limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h2>
@@ -1396,10 +1466,10 @@ without a reference clip.</p></li>
 speaker similarity than speaker-embedding-only (x-vector) mode.</p></li>
 <li><p><strong>Language detection.</strong> <code class="docutils literal notranslate"><span class="pre">language:</span> <span class="pre">auto</span></code> may misdetect for short or code-switched inputs;
 set <code class="docutils literal notranslate"><span class="pre">language</span></code> explicitly when you know the target language.</p></li>
-<li><p><strong>Rare runaway generation.</strong> Roughly 0.2% of utterances (observed on the 0.6B checkpoint) can
-fall into a repetition loop and keep generating up to <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code>. Raising
-<code class="docutils literal notranslate"><span class="pre">repetition_penalty</span></code> (default <code class="docutils literal notranslate"><span class="pre">1.05</span></code>) or lowering <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> mitigates it; the 1.7B
-checkpoint is less prone.</p></li>
+<li><p><strong>Rare runaway generation.</strong> Roughly 0.2% of utterances (observed on the 0.6B checkpoint, and
+on one- or two-word texts on 1.7B) can fall into a repetition loop and keep generating up to
+<code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code>. The default text-length budget stops such a loop after a few seconds with
+finish reason <code class="docutils literal notranslate"><span class="pre">length</span></code>; raising <code class="docutils literal notranslate"><span class="pre">repetition_penalty</span></code> (default <code class="docutils literal notranslate"><span class="pre">1.05</span></code>) also helps.</p></li>
 </ul>
 </section>
 </section>
@@ -1465,6 +1535,7 @@ checkpoint is less prone.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#synthesizing-speech">Synthesizing Speech</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#text-only-requests">Text-only Requests</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#voice-cloning">Voice Cloning</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#precomputed-speaker-embedding">Precomputed Speaker Embedding</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#language-hint">Language Hint</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#streaming">Streaming</a></li>
 </ul>
@@ -1475,6 +1546,7 @@ checkpoint is less prone.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-results">Benchmark Results</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#b-base">0.6B Base</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#b-customvoice">1.7B CustomVoice</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#runaway-regression">Runaway Regression</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known Limitations</a></li>
@@ -1511,7 +1583,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 23, 2026.
+  Last updated on Oct 29, 2026.
   <br/>
 </p>
   </div>

@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=c52cfe39"></script>
+    <script src="../_static/documentation_options.js?v=7f7c277e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -60,8 +60,8 @@
     <link rel="prev" title="NemotronLabs VoiceChat" href="nemotron_voicechat.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.9" />
-    <meta name="docbuild:last-update" content="Oct 23, 2026"/>
+  <meta name="docsearch:version" content="0.2.0" />
+    <meta name="docbuild:last-update" content="Oct 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -208,7 +208,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation — CUDA</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Installation — Apple Silicon</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — NPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Installation — Intel XPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Installation — Intel CPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Installation — MUSA</a></li>
@@ -216,10 +216,12 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3 TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="whisper_asr.html">Whisper ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron3_5_asr.html">Nemotron 3.5 ASR</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_transcribe.html">Nemotron Transcribe</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_transcribe_diarize.html">MOSS-Transcribe-Diarize</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_cosyvoice3.html">Fun-CosyVoice3</a></li>
@@ -231,7 +233,6 @@
 <li class="toctree-l1"><a class="reference internal" href="minicpm_o.html">MiniCPM-o</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_asr.html">Fun-ASR-Nano</a></li>
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
-<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="minimax_music3.html">MiniMax Music 3</a></li>
@@ -239,6 +240,7 @@
 <li class="toctree-l1"><a class="reference internal" href="auk.html">AuK</a></li>
 <li class="toctree-l1"><a class="reference internal" href="zonos2.html">ZONOS2</a></li>
 <li class="toctree-l1"><a class="reference internal" href="arkasr.html">ARK-ASR-3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hy_simulmt.html">Hy-SimulMT</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dots_tts.html">dots.tts</a></li>
 <li class="toctree-l1"><a class="reference internal" href="llada2_uni.html">LLaDA2.0-Uni</a></li>
@@ -269,15 +271,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/main.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_interactive_model.html">Full Duplex Interactive Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/adding_parameters.html">Adding a Parameter</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_guide.html">Full-Duplex Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
@@ -526,7 +526,12 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#stage-sampling">Stage sampling</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#all-platforms">All platforms</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cuda">CUDA</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ascend-npu">Ascend NPU</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-parity">Reference parity</a></li>
 </ul>
@@ -595,7 +600,7 @@ needs, reducing the combined FP32 codec weights and buffers by about 302 MiB.</p
 </section>
 <section id="native-full-duplex-ability">
 <h2>Native Full-Duplex Ability<a class="headerlink" href="#native-full-duplex-ability" title="Link to this heading">#</a></h2>
-<p>PersonaPlex also serves live full-duplex voice sessions on <code class="docutils literal notranslate"><span class="pre">/v1/realtime</span></code> with its <code class="docutils literal notranslate"><span class="pre">session</span></code> variant. Launching, settings and the protocol are in <a class="reference internal" href="../developer_reference/full_duplex_interactive_model.html#native-full-duplex-personaplex"><span class="std std-ref">Full Duplex Interactive Model</span></a>.</p>
+<p>PersonaPlex also serves live full-duplex voice sessions on <code class="docutils literal notranslate"><span class="pre">/v1/realtime</span></code> with its <code class="docutils literal notranslate"><span class="pre">session</span></code> variant. Launching, settings and the protocol are in <a class="reference internal" href="../developer_reference/full_duplex_guide.html#native-full-duplex-personaplex"><span class="std std-ref">Full Duplex Interactive Model</span></a>.</p>
 </section>
 <section id="request-parameters">
 <h2>Request parameters<a class="headerlink" href="#request-parameters" title="Link to this heading">#</a></h2>
@@ -643,15 +648,32 @@ The fixed caller-frame budget still determines the number of generated frames.</
 </section>
 <section id="known-limitations">
 <h2>Known limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h2>
+<section id="all-platforms">
+<h3>All platforms<a class="headerlink" href="#all-platforms" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Offline, one request at a time by default (<code class="docutils literal notranslate"><span class="pre">max_running_requests=1</span></code>). If you raise <code class="docutils literal notranslate"><span class="pre">--lm.engine.max_running_requests</span></code>, the requests in a batch share one depformer pass per frame, and each seeded request still draws from its own generator. A seeded reply repeats exactly only with one request in flight, because batched kernels can round differently.</p></li>
-<li><p>On CUDA the backbone’s decode step replays a CUDA graph (<code class="docutils literal notranslate"><span class="pre">--lm.engine.disable_cuda_graph</span> <span class="pre">true</span></code> turns it off); the 8 depformer steps still run eagerly, so a frame runs close to the 80 ms budget rather than well inside it.</p></li>
-<li><p>Decode feedback stays on device. On CUDA, <code class="docutils literal notranslate"><span class="pre">--lm.factory.enable_async_decode</span> <span class="pre">true</span></code> launches the next decode before collecting the previous result. The eager Depformer can delay frame delivery by one decode interval, so synchronous decode remains the default. Other platforms, requests needing host token history for sampling, and requests returning log probabilities use the synchronous path. When any request reaches its caller-frame budget, the whole batch uses synchronous decode for that step.</p></li>
-<li><p>Streaming Mimi decode follows <code class="docutils literal notranslate"><span class="pre">--code2wav.factory.chunk_ramp_frames</span></code> (default <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4]</span></code>: the first frame alone, then four at a time; a finished stream flushes its shorter remainder). Ready requests whose chunks share a width decode in one batched step of up to <code class="docutils literal notranslate"><span class="pre">max_batch_size</span></code> (default 8), each at its own decode position. <code class="docutils literal notranslate"><span class="pre">num_decode_slots</span></code> resident decode states default to the LM’s effective <code class="docutils literal notranslate"><span class="pre">max_running_requests</span></code>, and a smaller explicit value is rejected; a stream that finds every slot taken while another stream’s tail drains waits for the next free slot, so sustained overload is not bounded by this queue. On CUDA, graphs cover every batch size up to <code class="docutils literal notranslate"><span class="pre">min(max_batch_size,</span> <span class="pre">num_decode_slots)</span></code> and every chunk width up to <code class="docutils literal notranslate"><span class="pre">max_graph_frames</span></code> (the widest ramp entry unless set; <code class="docutils literal notranslate"><span class="pre">0</span></code> turns the graphs off), 8 × 4 = 32 graphs at LM concurrency 16; other shapes and platforms decode eagerly with the same states.</p></li>
-<li><p>On CUDA, streaming Mimi decode uses a dedicated stream. The stage accepts CPU codes only; transfers and decode-slot reset/replay stay on that stream, so waveform collection does not drain queued LM forwards. Other devices retain their normal execution context.</p></li>
+<li><p>Streaming Mimi decode follows <code class="docutils literal notranslate"><span class="pre">--code2wav.factory.chunk_ramp_frames</span></code> (default <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4]</span></code>: the first frame alone, then four at a time; a finished stream flushes its shorter remainder). Ready requests whose chunks share a width decode in one batched step of up to <code class="docutils literal notranslate"><span class="pre">max_batch_size</span></code> (default 8), each at its own decode position. <code class="docutils literal notranslate"><span class="pre">num_decode_slots</span></code> resident decode states default to the LM’s effective <code class="docutils literal notranslate"><span class="pre">max_running_requests</span></code>, and a smaller explicit value is rejected; a stream that finds every slot taken while another stream’s tail drains waits for the next free slot, so sustained overload is not bounded by this queue.</p></li>
 <li><p>The temporal attention window follows the streaming ring, including the masked oldest slot once its 3000-position cache fills. Boundary tests check this rule; they do not measure long-input audio quality.</p></li>
+</ul>
+</section>
+<section id="cuda">
+<h3>CUDA<a class="headerlink" href="#cuda" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>On CUDA, the Depformer’s RMSNorm and SiLU-gate run as fused Triton kernels whose outputs match the eager operations bit for bit; other devices use the eager operations.</p></li>
+<li><p>On CUDA the backbone’s decode step and all 8 Depformer steps replay CUDA graphs. At startup, offline serving captures the default audio-sampling layout for every configured batch bucket through the smallest bucket that covers the effective <code class="docutils literal notranslate"><span class="pre">max_running_requests</span></code>; session serving captures the same buckets with the deployment’s resolved audio sampling. Other sampling layouts and batch shapes run eagerly. <code class="docutils literal notranslate"><span class="pre">--lm.engine.disable_cuda_graph</span> <span class="pre">true</span></code> disables both backbone and Depformer graphs, while <code class="docutils literal notranslate"><span class="pre">--lm.factory.depformer_cuda_graph_batch_sizes</span> <span class="pre">'[]'</span></code> disables only Depformer graphs. Seeded requests preserve their per-request RNG draws.</p></li>
+<li><p>Decode feedback stays on device. On CUDA, <code class="docutils literal notranslate"><span class="pre">--lm.factory.enable_async_decode</span> <span class="pre">true</span></code> launches the next decode before collecting the previous result and can add 16–21% throughput with identical audio; synchronous decode remains the default. Other platforms, requests needing host token history for sampling, and requests returning log probabilities use the synchronous path. When any request reaches its caller-frame budget, the whole batch uses synchronous decode for that step.</p></li>
+<li><p>On CUDA, Mimi decode graphs cover every batch size up to <code class="docutils literal notranslate"><span class="pre">min(max_batch_size,</span> <span class="pre">num_decode_slots)</span></code> and every chunk width up to <code class="docutils literal notranslate"><span class="pre">max_graph_frames</span></code> (the widest ramp entry unless set; <code class="docutils literal notranslate"><span class="pre">0</span></code> turns the graphs off), 8 × 4 = 32 graphs at LM concurrency 16; other shapes and platforms decode eagerly with the same states.</p></li>
+<li><p>On CUDA, streaming Mimi decode uses a dedicated stream. The stage accepts CPU codes only; transfers and decode-slot reset/replay stay on that stream, so waveform collection does not drain queued LM forwards. Other devices retain their normal execution context.</p></li>
 <li><p>On a CUDA platform with resolved <code class="docutils literal notranslate"><span class="pre">device=cuda</span></code>, <code class="docutils literal notranslate"><span class="pre">page_size=1</span></code> and radix caching disabled (the default), window KV releases expired positions for reuse. Steady decode holds about 3.1k positions (1.5 GiB of BF16 KV) per long request with the default eviction interval; prefill and retract replay can temporarily hold more. CPU stages, other platforms, page sizes and radix-enabled configurations use the full KV pool. Context and request-length limits remain unchanged, and returning slots does not shrink the preallocated pool. Set <code class="docutils literal notranslate"><span class="pre">--lm.engine.disable_hybrid_swa_memory</span> <span class="pre">true</span></code> to use the full pool explicitly.</p></li>
 </ul>
+</section>
+<section id="ascend-npu">
+<h3>Ascend NPU<a class="headerlink" href="#ascend-npu" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>On Ascend NPU the backbone graph is off by default; pass <code class="docutils literal notranslate"><span class="pre">--lm.engine.disable_cuda_graph</span> <span class="pre">false</span></code> to replay the backbone’s NPU graph.</p></li>
+<li><p>On Ascend NPU, the platform enables the same Mimi graph ladder; the capture temporarily disables internal formats so Mimi’s convolutions run through <a class="reference external" href="https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/850/API/aolapi/context/ops-math/op_api_list.md">aclnn</a>.</p></li>
+</ul>
+</section>
 </section>
 <section id="tests">
 <h2>Tests<a class="headerlink" href="#tests" title="Link to this heading">#</a></h2>
@@ -738,7 +760,12 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#stage-sampling">Stage sampling</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#all-platforms">All platforms</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cuda">CUDA</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ascend-npu">Ascend NPU</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-parity">Reference parity</a></li>
 </ul>
@@ -776,7 +803,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 23, 2026.
+  Last updated on Oct 29, 2026.
   <br/>
 </p>
   </div>

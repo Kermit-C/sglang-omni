@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=c52cfe39"></script>
+    <script src="../_static/documentation_options.js?v=7f7c277e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -60,8 +60,8 @@
     <link rel="prev" title="Fun-CosyVoice3" href="fun_cosyvoice3.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.9" />
-    <meta name="docbuild:last-update" content="Oct 23, 2026"/>
+  <meta name="docsearch:version" content="0.2.0" />
+    <meta name="docbuild:last-update" content="Oct 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -208,7 +208,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation — CUDA</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Installation — Apple Silicon</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — NPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Installation — Intel XPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Installation — Intel CPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Installation — MUSA</a></li>
@@ -216,10 +216,12 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3 TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="whisper_asr.html">Whisper ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron3_5_asr.html">Nemotron 3.5 ASR</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_transcribe.html">Nemotron Transcribe</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_transcribe_diarize.html">MOSS-Transcribe-Diarize</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_cosyvoice3.html">Fun-CosyVoice3</a></li>
@@ -231,7 +233,6 @@
 <li class="toctree-l1"><a class="reference internal" href="minicpm_o.html">MiniCPM-o</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_asr.html">Fun-ASR-Nano</a></li>
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
-<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="minimax_music3.html">MiniMax Music 3</a></li>
@@ -239,6 +240,7 @@
 <li class="toctree-l1"><a class="reference internal" href="auk.html">AuK</a></li>
 <li class="toctree-l1"><a class="reference internal" href="zonos2.html">ZONOS2</a></li>
 <li class="toctree-l1"><a class="reference internal" href="arkasr.html">ARK-ASR-3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hy_simulmt.html">Hy-SimulMT</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dots_tts.html">dots.tts</a></li>
 <li class="toctree-l1"><a class="reference internal" href="llada2_uni.html">LLaDA2.0-Uni</a></li>
@@ -269,15 +271,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/main.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_interactive_model.html">Full Duplex Interactive Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/adding_parameters.html">Adding a Parameter</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_guide.html">Full-Duplex Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
@@ -552,6 +552,8 @@
 </div>
 <p>If they are missing and the Hub is unreachable, start-up fails with an error naming the repo and this command.</p>
 <p>The four stages share one GPU. Measured on one H200 (143.8 GB) with the offline example, the run peaks at about 129 GB: the talker engine reserves <code class="docutils literal notranslate"><span class="pre">mem_fraction_static=0.35</span></code> (about 47 GB, most of it KV pool) and the thinker takes what remains (about 73 GB, 17.7 GB of it bf16 weights). Lower <code class="docutils literal notranslate"><span class="pre">--talker.engine.mem_fraction_static</span></code> if the GPU is smaller or shared; the perception encoder and codec need only a few GB each.</p>
+<p>On CUDA the talker captures its decode step as a CUDA graph by default; the thinker, and the talker on other platforms, decode eagerly. On one H100 with the offline pipeline, the talker graph cuts end-to-end latency 1.66–1.76x on 8–44 s inputs and keeps the reply text identical. The reply audio stays within run-to-run variation but is not bit-identical to eager decode after about 7 s: past that context length the graph’s attention reduces in a different order, and the code sampler breaks near-ties differently. Set <code class="docutils literal notranslate"><span class="pre">--talker.engine.disable_cuda_graph</span> <span class="pre">true</span></code> to decode the talker eagerly.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--thinker.engine.disable_cuda_graph</span> <span class="pre">false</span></code> captures the thinker as well, roughly halving its decode step and the time to first text. Greedy reply text can then change where two candidate tokens tie in bf16 (7 of 44 test clips), so it is off by default.</p>
 </section>
 <section id="running-the-offline-example">
 <h2>Running the offline example<a class="headerlink" href="#running-the-offline-example" title="Link to this heading">#</a></h2>
@@ -574,14 +576,20 @@
 <h2>Realtime conversation<a class="headerlink" href="#realtime-conversation" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>examples/run_nemotron_voicechat_duplex.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--model-path<span class="w"> </span>/path/to/NVIDIA-NemotronLabs-VoiceChat-11B<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--serve<span class="w"> </span>--port<span class="w"> </span><span class="m">8097</span>
+<span class="w">  </span>--serve<span class="w"> </span>--port<span class="w"> </span><span class="m">8097</span><span class="w"> </span>--max-sessions<span class="w"> </span><span class="m">1</span>
 </pre></div>
 </div>
 <p>Open http://localhost:8097, click <strong>Start</strong>, and allow microphone access.
 If the server runs on a remote GPU host, forward port 8097 to your local machine first.
 Headphones help avoid acoustic feedback. The example uses the shared realtime
-playground and supports one session on one GPU, with a four-minute browser limit.
-It uses the checkpoint’s default prompt and voice.</p>
+playground with a four-minute browser limit. It defaults to one session and uses
+the checkpoint’s default prompt and voice.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--max-sessions</span></code> controls concurrent conversations. The default remains one.
+Each admitted session owns independent perception, transformer KV, and codec
+state; the thinker and talker KV pools are sized for the session limit plus one
+incoming request row. Perception and codec execution remain serialized in this
+foundation, so benchmark the 80 ms unit deadline before raising the limit in a
+latency-sensitive deployment.</p>
 </section>
 <section id="offline-request-parameters">
 <h2>Offline request parameters<a class="headerlink" href="#offline-request-parameters" title="Link to this heading">#</a></h2>
@@ -623,7 +631,8 @@ It uses the checkpoint’s default prompt and voice.</p>
 <section id="known-limitations">
 <h2>Known limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>The offline pipeline handles one request at a time (<code class="docutils literal notranslate"><span class="pre">max_running_requests=1</span></code> for both engines), without a barge-in or interrupt API.</p></li>
+<li><p>The offline pipeline handles one request at a time (<code class="docutils literal notranslate"><span class="pre">max_running_requests=1</span></code> for both engines), without a barge-in or interrupt API. Native duplex sessions have independent state but do not yet batch perception or codec work across conversations.</p></li>
+<li><p>A conversation holds at most 6144 positions in the thinker and in the talker: the system prompt, then one per 80 ms frame, so about eight minutes; a duplex session that reaches it ends with <code class="docutils literal notranslate"><span class="pre">context_exhausted</span></code>. The checkpoint was trained on conversations of at most about two minutes, and context beyond that may not be retained reliably.</p></li>
 <li><p>Single speaker (<code class="docutils literal notranslate"><span class="pre">Aria</span></code>, the checkpoint’s baked-in prompt latents).</p></li>
 <li><p>Classifier-free guidance is off (<code class="docutils literal notranslate"><span class="pre">guidance_scale=0</span></code>) although the checkpoint config enables it at 0.2.</p></li>
 <li><p>Talker output is not bit-identical to NeMo’s offline script even with deterministic sampling on both sides (about 82 % of quantizer cells and 63 of 150 frames agree on a 12 s fixture; transcripts and amplitude envelopes match). Known causes: the backbone and KV cache run in bfloat16 because SGLang’s attention backends and <code class="docutils literal notranslate"><span class="pre">sgl_kernel</span></code>’s Gemma RMSNorm have no fp32 path, while NeMo runs the whole talker in fp32; NeMo’s offline script enables classifier-free guidance by default; and NeMo’s offline recipe walks the system-prompt region before frame 0 (realtime convention here; see <code class="docutils literal notranslate"><span class="pre">prompt_region_steps</span></code>). The thinker is frame-exact with NeMo.</p></li>
@@ -723,7 +732,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 23, 2026.
+  Last updated on Oct 29, 2026.
   <br/>
 </p>
   </div>

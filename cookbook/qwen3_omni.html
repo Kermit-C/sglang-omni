@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=c52cfe39"></script>
+    <script src="../_static/documentation_options.js?v=7f7c277e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -60,8 +60,8 @@
     <link rel="prev" title="Cosmos3 Nano serving" href="cosmos3_nano.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.9" />
-    <meta name="docbuild:last-update" content="Oct 23, 2026"/>
+  <meta name="docsearch:version" content="0.2.0" />
+    <meta name="docbuild:last-update" content="Oct 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -208,7 +208,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation — CUDA</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Installation — Apple Silicon</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — NPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Installation — Intel XPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Installation — Intel CPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Installation — MUSA</a></li>
@@ -216,10 +216,12 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3 TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="whisper_asr.html">Whisper ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron3_5_asr.html">Nemotron 3.5 ASR</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_transcribe.html">Nemotron Transcribe</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_transcribe_diarize.html">MOSS-Transcribe-Diarize</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_cosyvoice3.html">Fun-CosyVoice3</a></li>
@@ -231,7 +233,6 @@
 <li class="toctree-l1"><a class="reference internal" href="minicpm_o.html">MiniCPM-o</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_asr.html">Fun-ASR-Nano</a></li>
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
-<li class="toctree-l1"><a class="reference internal" href="moss_tts_local.html">MOSS-TTS-Local</a></li>
 <li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="minimax_music3.html">MiniMax Music 3</a></li>
@@ -239,6 +240,7 @@
 <li class="toctree-l1"><a class="reference internal" href="auk.html">AuK</a></li>
 <li class="toctree-l1"><a class="reference internal" href="zonos2.html">ZONOS2</a></li>
 <li class="toctree-l1"><a class="reference internal" href="arkasr.html">ARK-ASR-3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hy_simulmt.html">Hy-SimulMT</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dots_tts.html">dots.tts</a></li>
 <li class="toctree-l1"><a class="reference internal" href="llada2_uni.html">LLaDA2.0-Uni</a></li>
@@ -269,15 +271,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/main.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_interactive_model.html">Full Duplex Interactive Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/adding_parameters.html">Adding a Parameter</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_guide.html">Full-Duplex Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
@@ -527,6 +527,7 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#qwen3-omni-persistent-session-stages">Qwen3-Omni persistent session stages</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#speculative-decoding">Speculative Decoding</a></li>
 </ul>
             </nav>
         </div>
@@ -554,7 +555,7 @@ docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </s
 pip<span class="w"> </span>install<span class="w"> </span>uv
 
 uv<span class="w"> </span>venv<span class="w"> </span>.venv<span class="w"> </span>-p<span class="w"> </span><span class="m">3</span>.12<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">source</span><span class="w"> </span>.venv/bin/activate
-uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--prerelease<span class="o">=</span>allow<span class="w"> </span><span class="s2">"sglang-omni==0.1.9"</span>
+uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--prerelease<span class="o">=</span>allow<span class="w"> </span><span class="s2">"sglang-omni==0.2.0"</span>
 </pre></div>
 </div>
 <p>See <a class="reference internal" href="../get_started/installation.html"><span class="std std-doc">Installation</span></a> for Docker digests and source installs.</p>
@@ -917,16 +918,77 @@ must check for an <code class="docutils literal notranslate"><span class="pre">e
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">examples/qwen3_omni/session_h200.yaml</span></code> sets what depends on the device: the per-stage memory fractions (those of the colocated speech profile for one H200) and <code class="docutils literal notranslate"><span class="pre">max_sessions</span></code>. On another device, declare both for that device; colocated stages require explicit memory fractions. Each open session retains up to the thinker’s <code class="docutils literal notranslate"><span class="pre">max_seq_len</span></code> (32768) tokens of KV, so <code class="docutils literal notranslate"><span class="pre">max_sessions</span></code> is the thinker’s KV pool in tokens, which the thinker logs at startup as <code class="docutils literal notranslate"><span class="pre">KV</span> <span class="pre">Cache</span> <span class="pre">is</span> <span class="pre">allocated.</span> <span class="pre">...</span> <span class="pre">#tokens</span></code>, divided by 32768: 555,988 tokens and 16 sessions with these fractions on one H200. The image and audio encoders run in their own processes under their own fractions, so the thinker’s <code class="docutils literal notranslate"><span class="pre">encoder_mem_reserve</span></code> is 0.</p>
+<p>The thinker and talker keep each session’s KV between units, and that KV holds a request row, so the session’s next unit reuses the row. A prefill batch therefore admits the next unit of every waiting session, not only as many as there are free rows. <code class="docutils literal notranslate"><span class="pre">--thinker.factory.continuation_aware_admission</span> <span class="pre">false</span></code> and <code class="docutils literal notranslate"><span class="pre">--talker_ar.factory.continuation_aware_admission</span> <span class="pre">false</span></code> count those units against the free rows like new requests; the KV is still kept and the rows still reused.</p>
 <p>The session takes 16 kHz PCM16 audio and camera frames. A user turn ends on <code class="docutils literal notranslate"><span class="pre">speech.stopped</span></code>, <code class="docutils literal notranslate"><span class="pre">commit</span></code>, or the end of input; the reply streams as <code class="docutils literal notranslate"><span class="pre">text_delta</span></code> and 24 kHz <code class="docutils literal notranslate"><span class="pre">pcm16</span></code> with <code class="docutils literal notranslate"><span class="pre">turn.queued</span></code>, <code class="docutils literal notranslate"><span class="pre">turn.started</span></code> and <code class="docutils literal notranslate"><span class="pre">turn.done</span></code>, and <code class="docutils literal notranslate"><span class="pre">turn.done</span></code> arrives once the reply’s audio has left the server. The model hears each utterance whole and answers it with the conversation so far; it does not listen while it speaks. Speech that starts during a reply, or an <code class="docutils literal notranslate"><span class="pre">interrupt</span></code> control, stops the reply and publishes <code class="docutils literal notranslate"><span class="pre">turn.interrupted</span></code>. <code class="docutils literal notranslate"><span class="pre">max_utterance_seconds</span></code> (60) bounds the audio of one utterance and <code class="docutils literal notranslate"><span class="pre">max_queued_turns</span></code> (8) the finished utterances waiting behind the turn being answered; a client past either ends its session.</p>
 <p>Camera input uses <code class="docutils literal notranslate"><span class="pre">sglang.input_image.append</span></code>, as for <a class="reference internal" href="minicpm_o.html"><span class="std std-doc">MiniCPM-o</span></a>: a base64 JPEG or PNG in <code class="docutils literal notranslate"><span class="pre">image</span></code> and its audio timeline position in <code class="docutils literal notranslate"><span class="pre">sglang.t_ms</span></code>. The newest <code class="docutils literal notranslate"><span class="pre">max_utterance_frames</span></code> (4) frames that fall in an utterance go to the model with that turn; each frame costs thinker context for the rest of the session.</p>
-<p><code class="docutils literal notranslate"><span class="pre">instructions</span></code> can be set at session start and changed with <code class="docutils literal notranslate"><span class="pre">configure</span></code> until the first user turn is processed. <code class="docutils literal notranslate"><span class="pre">sampling</span></code> can be changed with <code class="docutils literal notranslate"><span class="pre">configure</span></code> at any time and applies from the next unit; the defaults are greedy decoding for the thinker and the checkpoint’s <code class="docutils literal notranslate"><span class="pre">generation_config.json</span></code> for the talker (<code class="docutils literal notranslate"><span class="pre">talker_temperature</span></code> 0.9, <code class="docutils literal notranslate"><span class="pre">talker_top_k</span></code> 50, <code class="docutils literal notranslate"><span class="pre">talker_top_p</span></code> 1.0, <code class="docutils literal notranslate"><span class="pre">talker_repetition_penalty</span></code> 1.05, <code class="docutils literal notranslate"><span class="pre">talker_max_new_tokens</span></code> 4096), with <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> 2048 per turn for the thinker.</p>
+<p><code class="docutils literal notranslate"><span class="pre">instructions</span></code> can be set at session start and changed with <code class="docutils literal notranslate"><span class="pre">configure</span></code> until the first user turn is processed. <code class="docutils literal notranslate"><span class="pre">sampling</span></code> can be changed with <code class="docutils literal notranslate"><span class="pre">configure</span></code> at any time and applies from the next unit; the defaults are greedy decoding for the thinker and the checkpoint’s <code class="docutils literal notranslate"><span class="pre">generation_config.json</span></code> for the talker (<code class="docutils literal notranslate"><span class="pre">talker_temperature</span></code> 0.9, <code class="docutils literal notranslate"><span class="pre">talker_top_k</span></code> 50, <code class="docutils literal notranslate"><span class="pre">talker_top_p</span></code> 1.0, <code class="docutils literal notranslate"><span class="pre">talker_repetition_penalty</span></code> 1.05, <code class="docutils literal notranslate"><span class="pre">talker_max_new_tokens</span></code> 4096), with <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> 2048 per turn for the thinker. Over <code class="docutils literal notranslate"><span class="pre">/v1/realtime</span></code>, <code class="docutils literal notranslate"><span class="pre">sglang.sampling</span></code> in a later <code class="docutils literal notranslate"><span class="pre">session.update</span></code> applies from the next unit as well, and <code class="docutils literal notranslate"><span class="pre">instructions</span></code> is accepted only in the first <code class="docutils literal notranslate"><span class="pre">session.update</span></code>; <code class="docutils literal notranslate"><span class="pre">session.updated</span></code> reports this as <code class="docutils literal notranslate"><span class="pre">supports_sampling_updates</span></code> true and <code class="docutils literal notranslate"><span class="pre">supports_instruction_updates</span></code> false.</p>
 <p>Current limits:</p>
 <ul class="simple">
 <li><p>No user transcript is published.</p></li>
 <li><p>After an interruption, send <code class="docutils literal notranslate"><span class="pre">truncate</span></code> with the milliseconds of reply audio the listener heard (<code class="docutils literal notranslate"><span class="pre">conversation.item.truncate</span></code>); the model’s history then keeps only that much of the reply. Without it, the whole reply generated so far stays in the history.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">instructions</span></code> cannot change after the first user turn is processed; open a new session instead.</p></li>
 </ul>
-<p>See <a class="reference internal" href="../developer_reference/full_duplex_interactive_model.html#session-graph"><span class="std std-ref">Session Graph</span></a> for the shared routing and delivery contracts.</p>
+<p>See <a class="reference internal" href="../developer_reference/full_duplex_guide.html#session-graph"><span class="std std-ref">Session Graph</span></a> for the shared routing and delivery contracts.</p>
+</section>
+<section id="speculative-decoding">
+<h2>Speculative Decoding<a class="headerlink" href="#speculative-decoding" title="Link to this heading">#</a></h2>
+<p>The thinker can verify tokens proposed by SpeechSpec’s DFlash draft <a class="reference external" href="https://huggingface.co/yuekai/qwen3_omni_30b_a3b_instruct_dflash_block8"><code class="docutils literal notranslate"><span class="pre">yuekai/qwen3_omni_30b_a3b_instruct_dflash_block8</span></code></a> or EAGLE3 draft <a class="reference external" href="https://huggingface.co/yuekai/qwen3_omni_30b_a3b_instruct_eagle3_audio"><code class="docutils literal notranslate"><span class="pre">yuekai/qwen3_omni_30b_a3b_instruct_eagle3_audio</span></code></a> on a text-only server.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># DFlash: one 8-token block per step</span>
+sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-path<span class="w"> </span>Qwen/Qwen3-Omni-30B-A3B-Instruct<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--text-only<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_algorithm<span class="w"> </span>DFLASH<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_draft_model_path<span class="w"> </span>yuekai/qwen3_omni_30b_a3b_instruct_dflash_block8<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_num_draft_tokens<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span>
+
+<span class="c1"># EAGLE3: a 3-step chain</span>
+sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-path<span class="w"> </span>Qwen/Qwen3-Omni-30B-A3B-Instruct<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--text-only<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_algorithm<span class="w"> </span>EAGLE3<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_draft_model_path<span class="w"> </span>yuekai/qwen3_omni_30b_a3b_instruct_eagle3_audio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_num_steps<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_eagle_topk<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--thinker.engine.speculative_num_draft_tokens<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><strong>Context.</strong> The thinker serves within the draft’s context (8,192 tokens for both drafts), and a request whose prompt plus <code class="docutils literal notranslate"><span class="pre">max_tokens</span></code> exceeds it, less a few tokens each step reserves, is rejected with an error. Setting <code class="docutils literal notranslate"><span class="pre">--preprocessing.factory.max_seq_len</span> <span class="pre">8192</span></code> rejects most of them before the thinker.</p></li>
+<li><p><strong>Sampling.</strong> Requests with <code class="docutils literal notranslate"><span class="pre">repetition_penalty</span></code>, <code class="docutils literal notranslate"><span class="pre">frequency_penalty</span></code>, <code class="docutils literal notranslate"><span class="pre">presence_penalty</span></code>, <code class="docutils literal notranslate"><span class="pre">min_p</span></code> or logprobs are rejected, because the draft workers apply penalties once per verify block, drop <code class="docutils literal notranslate"><span class="pre">min_p</span></code>, and skip the sampler that records logprobs. Rollout <code class="docutils literal notranslate"><span class="pre">/generate</span></code> requests default to <code class="docutils literal notranslate"><span class="pre">return_logprob:</span> <span class="pre">true</span></code>, so they must send <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p></li>
+<li><p><strong>Scheduling.</strong> Async decode is turned off, and setting <code class="docutils literal notranslate"><span class="pre">enable_mixed_chunk</span></code> is rejected. Sessions and weight updates are refused while a draft is loaded.</p></li>
+<li><p><strong>Speech output.</strong> A draft is refused on a speech server for now. The thinker captures the layer the talker reads through the same hidden-state capture the drafts use, and the speculative prefill does not store the talker’s prompt rows, so serve with <code class="docutils literal notranslate"><span class="pre">--text-only</span></code>.</p></li>
+</ul>
+<p>Text-only ASR on LibriSpeech test-clean (<code class="docutils literal notranslate"><span class="pre">--text-only</span></code>, thinker on one H200 141GB with FA3 and SGLang 0.5.22, greedy, <code class="docutils literal notranslate"><span class="pre">max_tokens</span> <span class="pre">200</span></code>), in requests per second; concurrency 1 over all 2,620 utterances, concurrency 4 and 8 over the two halves, each on a server that has not seen them:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Concurrency</p></th>
+<th class="head"><p>Baseline</p></th>
+<th class="head"><p>DFlash</p></th>
+<th class="head"><p>EAGLE3</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>7.78</p></td>
+<td><p>12.95 (1.66x)</p></td>
+<td><p>11.57 (1.49x)</p></td>
+</tr>
+<tr class="row-odd"><td><p>4</p></td>
+<td><p>16.54</p></td>
+<td><p>24.23 (1.46x)</p></td>
+<td><p>21.43 (1.30x)</p></td>
+</tr>
+<tr class="row-even"><td><p>8</p></td>
+<td><p>23.94</p></td>
+<td><p>37.19 (1.55x)</p></td>
+<td><p>31.80 (1.33x)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>DFlash accepts 4.7 tokens per verify and EAGLE3 3.4, with WER unchanged. Requests that repeat earlier audio hit the prefix cache, which speeds the baseline up and slows DFlash down, so benchmark each pass on utterances its server has not seen.</p>
 </section>
 </section>
 
@@ -986,6 +1048,7 @@ must check for an <code class="docutils literal notranslate"><span class="pre">e
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#qwen3-omni-persistent-session-stages">Qwen3-Omni persistent session stages</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#speculative-decoding">Speculative Decoding</a></li>
 </ul>
   </nav></div>
 
@@ -1019,7 +1082,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 23, 2026.
+  Last updated on Oct 29, 2026.
   <br/>
 </p>
   </div>
