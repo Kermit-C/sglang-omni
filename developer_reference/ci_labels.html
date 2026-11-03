@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 02, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 03, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -324,6 +324,7 @@
 <li class="toctree-l1"><a class="reference internal" href="profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="full_duplex_guide.html">Full-Duplex Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="duplex_load_generator_pacing.html">Duplex Load Generator Pacing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tts_bench.html">TTS benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tts_model_integration.html">TTS Model Integration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="asr_bench.html">ASR benchmark runbook</a></li>
@@ -653,7 +654,7 @@
 </tr>
 <tr class="row-even"><td><p>Omni CI: MPS</p></td>
 <td><p>H100</p></td>
-<td><p>Two Higgs-TTS or MOSS-TTS workers sharing one H100 through CUDA MPS, with the TTS quality assertions</p></td>
+<td><p>External CUDA MPS DP2 non-streaming validation, native MPS lifecycle validation, and native CUDA IPC weight-sharing lifecycle validation</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code> or <code class="docutils literal notranslate"><span class="pre">run-all-ci</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>Omni CI: Omni</p></td>
@@ -723,8 +724,8 @@
 <section id="the-omni-ci-workflow">
 <h2>The Omni CI workflow<a class="headerlink" href="#the-omni-ci-workflow" title="Link to this heading">#</a></h2>
 <p>Omni CI runs PR Test and the four H100 model stages. Its preflight job waits for lint, resolves the labels and draws the models once. A shared setup job then builds the virtualenv and downloads model weights. With <code class="docutils literal notranslate"><span class="pre">run-all-ci</span></code>, the stages run in this order:</p>
-<p>PR Test → ASR → TTS → MPS → Omni</p>
-<p>Only PR Test and the selected stages actually run; a stage that is not selected is skipped at once. With <code class="docutils literal notranslate"><span class="pre">run-omni-ci</span></code> alone, Omni starts as soon as PR Test finishes, and with <code class="docutils literal notranslate"><span class="pre">run-tts-ci</span></code> and <code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code>, the order is PR Test → TTS → MPS. Each stage waits for the previous one to finish, and a stage that fails does not stop the stages after it. A failed setup job blocks every stage.</p>
+<p>PR Test → ASR, TTS and Omni side by side → MPS</p>
+<p>Only PR Test and the selected stages actually run; a stage that is not selected is skipped at once. ASR, TTS and Omni start together as soon as PR Test finishes, whether it passed or not, and their jobs spread over whichever H100 runners are free. Jobs within a stage run side by side as well, except TTS stage 3, which waits for TTS stages 1 and 2 because it compares their results. MPS starts after the other selected stages finish: it tests the PR head commit instead of the merge commit, so it may rebuild the PR’s shared virtualenv, and that must not happen while another stage is using it. With <code class="docutils literal notranslate"><span class="pre">run-tts-ci</span></code> and <code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code>, the order is PR Test → TTS → MPS. A stage that fails does not stop any other stage. A failed setup job blocks every stage.</p>
 <section id="pr-test">
 <h3>PR Test<a class="headerlink" href="#pr-test" title="Link to this heading">#</a></h3>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -859,8 +860,13 @@
 </section>
 <section id="mps">
 <h3>MPS<a class="headerlink" href="#mps" title="Link to this heading">#</a></h3>
-<p>MPS has one job, stage 1 - MPS non-streaming. It runs two TTS router workers on a single H100 that share the GPU through CUDA MPS, and checks three things: the two workers are separate MPS clients on the intended GPU, they actually execute at the same time, and the non-streaming word error rate, speaker similarity, UTMOS and audio integrity match the TTS stage’s assertions.</p>
-<p>The stage label is <code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code>. MPS has no model labels of its own. It accepts <code class="docutils literal notranslate"><span class="pre">run-higgs-tts-3-4b</span></code> and <code class="docutils literal notranslate"><span class="pre">run-moss-tts-local-transformer-v1.5</span></code>. A model label does not run MPS. With <code class="docutils literal notranslate"><span class="pre">run-tts-ci</span></code> and <code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code>, one of these labels selects that model for both stages. With only <code class="docutils literal notranslate"><span class="pre">run-tts-ci</span></code>, MPS does not run. With no Higgs or MOSS label, MPS draws from its own pool.</p>
+<p><code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code> runs three sequential validations on H100:</p>
+<ol class="arabic simple">
+<li><p>External CUDA MPS DP2 non-streaming validation checks that two TTS router workers share one H100 through CUDA MPS and meet the TTS word error rate, speaker similarity, UTMOS and audio integrity assertions.</p></li>
+<li><p>Native MPS lifecycle validation uses Higgs-TTS to check daemon sharing, recovery behavior and clean teardown.</p></li>
+<li><p>Native CUDA IPC weight-sharing lifecycle validation uses MOSS-TTS Local to check shared-weight memory savings, process startup order and leader failure handling.</p></li>
+</ol>
+<p>All three validations run under the existing <code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code> label. The label accepts <code class="docutils literal notranslate"><span class="pre">run-higgs-tts-3-4b</span></code> and <code class="docutils literal notranslate"><span class="pre">run-moss-tts-local-transformer-v1.5</span></code> for the external CUDA MPS DP2 validation; those labels do not change the fixed models used by the native lifecycle validations. A model label does not run MPS. With <code class="docutils literal notranslate"><span class="pre">run-tts-ci</span></code> and <code class="docutils literal notranslate"><span class="pre">run-mps-ci</span></code>, one of these labels selects the external MPS model and the TTS model. With only <code class="docutils literal notranslate"><span class="pre">run-tts-ci</span></code>, MPS does not run. With no Higgs or MOSS label, the external MPS validation draws from its own pool.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Model label</p></th>
@@ -1227,7 +1233,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 02, 2026.
+  Last updated on Nov 03, 2026.
   <br/>
 </p>
   </div>
