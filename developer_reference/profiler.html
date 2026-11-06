@@ -51,7 +51,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'developer_reference/profiler';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/sidebar_company_toggle.js?v=1646c162"></script>
+    <script src="../_static/js/sidebar_company_toggle.js?v=7622d557"></script>
     <script src="../_static/js/qwen3_omni_server_generator.js?v=d7738e8a"></script>
     <script src="../_static/js/ming_omni_server_generator.js?v=7979a72f"></script>
     <link rel="icon" href="../_static/logo.ico"/>
@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 03, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -207,13 +207,22 @@
     <div class="bd-toc-item navbar-nav active">
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation — CUDA</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Installation — Apple Silicon</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — NPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Installation — Intel XPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Installation — Intel CPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Installation — MUSA</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Welcome to SGLang-Omni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/apiserver_quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/examples.html">Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Apple Silicon</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../mlx/index.html">Native MLX / Voxt</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Intel XPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Intel CPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Moore Threads MUSA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="nav bd-sidenav">
@@ -307,10 +316,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/native_media_routes.html">Native Media Routes</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MLX</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../mlx/index.html">MLX Path</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Reference</span></p>
 <ul class="current nav bd-sidenav">
@@ -745,15 +750,19 @@ first executable prefill / extend batch is selected.</p>
 <td><p><code class="docutils literal notranslate"><span class="pre">scheduler_first_emit</span></code></p></td>
 <td><p>First <code class="docutils literal notranslate"><span class="pre">stream_output_builder</span></code> emission per request</p></td>
 </tr>
-<tr class="row-odd"><td><p>Code2Wav</p></td>
+<tr class="row-odd"><td><p>AR scheduler</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">session_kv_snapshot</span></code></p></td>
+<td><p>Streaming-session KV after a completed Unit has checkpointed: logical/session-window lengths, allocated/available pool positions and cache-evictable positions</p></td>
+</tr>
+<tr class="row-even"><td><p>Code2Wav</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">code2wav_decode_start</span></code></p></td>
 <td><p>Each window’s decode start: trigger, start/end/new/context/window frames, <code class="docutils literal notranslate"><span class="pre">rows</span></code> (the windows its replay decodes together), active and threshold-ready requests, inbox depth</p></td>
 </tr>
-<tr class="row-even"><td><p>Code2Wav</p></td>
+<tr class="row-odd"><td><p>Code2Wav</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">code2wav_decode_launched</span></code></p></td>
 <td><p>Pipelined window whose vocoder work and asynchronous D2H copy have been enqueued; includes execution mode, window/new-frame counts and <code class="docutils literal notranslate"><span class="pre">rows</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>Code2Wav</p></td>
+<tr class="row-even"><td><p>Code2Wav</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">code2wav_decode_end</span></code></p></td>
 <td><p>Repeats start metadata and adds the current decode’s <code class="docutils literal notranslate"><span class="pre">audio_samples</span></code> plus execution metadata; output-overlap runs also include <code class="docutils literal notranslate"><span class="pre">pipelined</span></code> and the previous window’s post-EOS-scan <code class="docutils literal notranslate"><span class="pre">d2h_wait_ns</span></code></p></td>
 </tr>
@@ -789,6 +798,7 @@ metadata to name the Unit as <code class="docutils literal notranslate"><span cl
 Unit lifecycle and start events carry the input modality and media clock.
 Output events carry the output sequence, modality, media clock, duration, and
 kind. Payload bytes are never stored.</p>
+<p><code class="docutils literal notranslate"><span class="pre">session_kv_snapshot</span></code> is emitted after a completed AR Unit releases its request row into the streaming-session cache. Its <code class="docutils literal notranslate"><span class="pre">cache_type</span></code> and <code class="docutils literal notranslate"><span class="pre">kv_allocator_type</span></code> fields identify the active cache path. <code class="docutils literal notranslate"><span class="pre">session_logical_length</span></code> is the record’s logical sequence length and can exceed the physical pool for a sliding-window model. <code class="docutils literal notranslate"><span class="pre">session_swa_evicted_length</span></code> is the record’s SWA eviction cursor, and <code class="docutils literal notranslate"><span class="pre">session_window_kv_positions</span></code> is their difference. <code class="docutils literal notranslate"><span class="pre">kv_pool_capacity_positions</span></code>, <code class="docutils literal notranslate"><span class="pre">kv_pool_allocated_positions</span></code>, <code class="docutils literal notranslate"><span class="pre">available_kv_positions</span></code>, and <code class="docutils literal notranslate"><span class="pre">evictable_kv_positions</span></code> describe the allocator at that boundary. For a single PureSWA session with radix caching disabled, the session-window and pool-allocated counts must agree; their plateau, not the logical length or process GPU memory, shows whether the pool reuses expired slots during a long call.</p>
 <p>The event boundaries have these meanings:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">session_unit_ready</span></code> is declared by the ingress owner when a logical Unit
@@ -1146,7 +1156,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 03, 2026.
+  Last updated on Nov 06, 2026.
   <br/>
 </p>
   </div>

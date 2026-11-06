@@ -51,7 +51,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'developer_reference/bump_version';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/sidebar_company_toggle.js?v=1646c162"></script>
+    <script src="../_static/js/sidebar_company_toggle.js?v=7622d557"></script>
     <script src="../_static/js/qwen3_omni_server_generator.js?v=d7738e8a"></script>
     <script src="../_static/js/ming_omni_server_generator.js?v=7979a72f"></script>
     <link rel="icon" href="../_static/logo.ico"/>
@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 03, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -206,13 +206,22 @@
     <div class="bd-toc-item navbar-nav active">
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation — CUDA</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Installation — Apple Silicon</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Installation — NPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Installation — Intel XPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Installation — Intel CPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Installation — MUSA</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Welcome to SGLang-Omni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/apiserver_quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/examples.html">Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Apple Silicon</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../mlx/index.html">Native MLX / Voxt</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Intel XPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Intel CPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Moore Threads MUSA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="nav bd-sidenav">
@@ -306,10 +315,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/native_media_routes.html">Native Media Routes</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MLX</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../mlx/index.html">MLX Path</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Reference</span></p>
 <ul class="current nav bd-sidenav">
@@ -643,6 +648,12 @@ comment that says a pin matches the sglang stack marks a line to revisit.</p>
 </div>
 <p>Search the tree for the old versions and the old image digest; the table is
 what past bumps touched.</p>
+<p>List the registry’s tags for the new version before saying that a provider
+image does not exist: <code class="docutils literal notranslate"><span class="pre">https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags?name=v&lt;tag&gt;</span></code>
+names every <code class="docutils literal notranslate"><span class="pre">-xeon</span></code>, <code class="docutils literal notranslate"><span class="pre">-xpu</span></code>, <code class="docutils literal notranslate"><span class="pre">-rocm*</span></code> and <code class="docutils literal notranslate"><span class="pre">-cann*</span></code> tag with its digest, and
+the device set follows upstream’s <code class="docutils literal notranslate"><span class="pre">release-docker-*.yml</span></code> matrices at the tag.
+One bump declared the NPU image absent when it had been published five days
+earlier under a new CANN and device suffix.</p>
 <p>The Intel CPU and XPU stacks pin their own SGLang tag and base images, and
 their CI workflows build <code class="docutils literal notranslate"><span class="pre">docker/cpu.Dockerfile</span></code> and <code class="docutils literal notranslate"><span class="pre">docker/xpu.Dockerfile</span></code>
 on every PR that touches <code class="docutils literal notranslate"><span class="pre">sglang_omni/</span></code>. <code class="docutils literal notranslate"><span class="pre">sglang_omni/platforms/</span></code> imports the
@@ -656,10 +667,11 @@ torch and torchvision pins, which move independently of the CUDA manifest:
 one release moved the SYCL kernel from a git
 requirement to a pinned wheel and added <code class="docutils literal notranslate"><span class="pre">setuptools-rust</span></code> to the build
 requirements, which the image avoids by building without isolation.</p>
-<p>The ROCm, NPU and MUSA stacks (<code class="docutils literal notranslate"><span class="pre">docker/rocm.Dockerfile</span></code>, <code class="docutils literal notranslate"><span class="pre">pyproject_rocm.toml</span></code>)
-pin their own SGLang tag and base images. No project CI builds them, so a bump
-PR leaves them alone, says so in its description, and hands the provider owners
-the new tag, the matching provider image digest if one exists, and any platform
+<p>The ROCm, NPU and MUSA stacks (<code class="docutils literal notranslate"><span class="pre">docker/rocm.Dockerfile</span></code>, <code class="docutils literal notranslate"><span class="pre">docker/musa.Dockerfile</span></code>,
+<code class="docutils literal notranslate"><span class="pre">pyproject_npu.toml</span></code>) pin their own SGLang tag and base images. No project CI
+builds them. A bump PR moves their tags and digests when the registry has an
+image for the new tag, says in its description that they are untested here,
+and hands the provider owners the list of what moved and any platform
 dispatch change made in <code class="docutils literal notranslate"><span class="pre">sglang_omni/platforms/</span></code>.</p>
 </section>
 <section id="where-omni-depends-on-sglang">
@@ -676,7 +688,11 @@ re-export resolves to the same origin, and that the signature or dataclass
 fields are unchanged. An import behind <code class="docutils literal notranslate"><span class="pre">except</span> <span class="pre">ImportError</span></code> gets the
 same check: the MOSS-TTS flash attention import was guarded that way, and
 when <code class="docutils literal notranslate"><span class="pre">sglang.jit_kernel</span></code> became <code class="docutils literal notranslate"><span class="pre">sglang.kernels.ops</span></code> it would have fallen
-back to SDPA without a word.</p>
+back to SDPA without a word. A bare kernel imported from <code class="docutils literal notranslate"><span class="pre">sglang.kernels.ops.*</span></code>
+is not a stable surface either: one release dropped the <code class="docutils literal notranslate"><span class="pre">rmsnorm</span></code> dispatcher
+from that package while the kernel itself stayed in <code class="docutils literal notranslate"><span class="pre">sgl_kernel</span></code>. Take a
+kernel from the layer that wraps it, from <code class="docutils literal notranslate"><span class="pre">sgl_kernel</span></code>, or from the Omni
+platform, which carries the per-device forms.</p>
 <p><strong>Borrowed and subclassed classes.</strong> <code class="docutils literal notranslate"><span class="pre">OmniScheduler</span></code> looks up the upstream
 <code class="docutils literal notranslate"><span class="pre">Scheduler</span></code> methods it does not override through <code class="docutils literal notranslate"><span class="pre">__getattr__</span></code> and runs them
 with itself as <code class="docutils literal notranslate"><span class="pre">self</span></code>, and builds the scheduler components those methods
@@ -690,9 +706,25 @@ wrapped <code class="docutils literal notranslate"><span class="pre">get_next_ba
 attribute only upstream’s <code class="docutils literal notranslate"><span class="pre">__init__</span></code> set. Upstream also moves work between
 methods: request timeout aborts left <code class="docutils literal notranslate"><span class="pre">get_next_batch_to_run</span></code> for an intake
 method Omni’s event loops never call, which disables them without an error.
+A borrowed body also writes state Omni reads before calling it: one release
+made <code class="docutils literal notranslate"><span class="pre">get_next_batch_to_run</span></code> drop finished requests from the running batch and
+clear its <code class="docutils literal notranslate"><span class="pre">batch_is_full</span></code> flag on every pass, so the async decode loop, which
+read the flag first to decide whether to drain its pending step, built a mixed
+prefill batch it could not reslice and died under load; audit the state a
+borrowed body writes as closely as the state it reads, and test the loop
+predicates against the builder’s view.
 When a constructor gains or loses fields, pass the new shape;
 a helper that filters kwargs by signature or branches on field layout keeps
 two versions alive.</p>
+<p>A method Omni overrides on, or shadows for, an upstream class is called by
+upstream with upstream’s argument list, so a parameter or a return value
+added upstream is a break that neither the import check nor the call-site
+check sees. Diff the upstream signature and return annotation of every such
+method between the tags with a script that walks Omni’s classes for upstream
+bases and borrowed classes, and read the body of each one that changed. One
+bump changed <code class="docutils literal notranslate"><span class="pre">init_kv_cache_configurator</span></code>, <code class="docutils literal notranslate"><span class="pre">get_num_allocatable_reqs</span></code> and
+the prefill graph runner’s <code class="docutils literal notranslate"><span class="pre">load_batch</span></code> this way, and every stage failed at
+boot, at admission or at the first graph replay.</p>
 <p><strong>The boot sequence.</strong> <code class="docutils literal notranslate"><span class="pre">ModelWorker</span></code> runs upstream’s worker
 boot itself: publish the resolved config together with the process
 placement, run the parallel runtime phase, run the layer runtime phase, then
@@ -937,9 +969,11 @@ inherited upstream change a user can observe, and the A/B with both arms’
 commits and image digests, sample counts and the profiler attribution for
 any delta outside noise. Measurements and inferences are labeled as what
 they are.</p>
-<p>Run CI with <code class="docutils literal notranslate"><span class="pre">run-all-ci</span></code>. A stage without a model label draws its model at
-random, so give each preset its own run on the new image before merge: keep
-<code class="docutils literal notranslate"><span class="pre">run-all-ci</span></code> and add one model label per stage, for example
+<p>Run CI on every H100 model stage with
+<code class="docutils literal notranslate"><span class="pre">/tag-and-rerun-ci</span> <span class="pre">asr</span> <span class="pre">tts</span> <span class="pre">mps</span> <span class="pre">omni</span> <span class="pre">full-duplex</span> <span class="pre">cascaded</span></code>. A stage without a
+model label draws its model at random, so give each preset its own run on the
+new image before merge: keep those stage labels and add one model label per
+stage, for example
 <code class="docutils literal notranslate"><span class="pre">run-moss-tts-local-transformer-v1.5</span></code>, <code class="docutils literal notranslate"><span class="pre">run-fun-asr-nano-2512</span></code> and
 <code class="docutils literal notranslate"><span class="pre">run-minicpm-o-4.5</span></code>. The model labels within a stage are exclusive. The
 CI section of the pull request template lists every label.</p>
@@ -1029,7 +1063,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 03, 2026.
+  Last updated on Nov 06, 2026.
   <br/>
 </p>
   </div>
