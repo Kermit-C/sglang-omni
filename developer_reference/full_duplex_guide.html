@@ -33,8 +33,8 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=a64801f4" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=a64801f4" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=3b484c19" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=3b484c19" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -51,7 +51,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'developer_reference/full_duplex_guide';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/sidebar_company_toggle.js?v=7622d557"></script>
+    <script src="../_static/js/sidebar_company_toggle.js?v=4014cbb0"></script>
     <script src="../_static/js/qwen3_omni_server_generator.js?v=d7738e8a"></script>
     <script src="../_static/js/ming_omni_server_generator.js?v=7979a72f"></script>
     <link rel="icon" href="../_static/logo.ico"/>
@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -208,21 +208,18 @@
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../index.html">Welcome to SGLang-Omni</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/apiserver_quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quickstart.html">Quickstart</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/examples.html">Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/troubleshooting.html">Troubleshooting</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Platforms</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Apple Silicon</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="../mlx/index.html">Native MLX / Voxt</a></li>
-</ul>
-</details></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Ascend NPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Intel XPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Intel CPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Moore Threads MUSA</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_apple_silicon.html">Apple Silicon</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_npu.html">Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_xpu.html">Intel XPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_cpu.html">Intel CPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_musa.html">Moore Threads MUSA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="nav bd-sidenav">
@@ -320,6 +317,11 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Reference</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="main.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contribution_guide.html">Contribution Guide</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="mlx/index.html">Native MLX</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="mlx/long_audio.html">Qwen3-ASR long-recording measurements</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1"><a class="reference internal" href="apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pipeline.html">Pipeline Overview</a></li>
 <li class="toctree-l1"><a class="reference internal" href="config.html">Config</a></li>
@@ -1017,9 +1019,17 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <p>To use services you already run, drop their <code class="docutils literal notranslate"><span class="pre">services</span></code> entries and point the nodes’ <code class="docutils literal notranslate"><span class="pre">base_url</span></code> at them; a command-line override such as <code class="docutils literal notranslate"><span class="pre">--session_nodes.llm.base_url</span> <span class="pre">http://127.0.0.1:9000/v1</span></code> changes one field without editing the file. The rest of this section lists every launch mode and what each profile needs started beforehand; Configuration, Node Reference and Compatibility and Constraints list every setting and the settings that cannot be combined.</p>
 <p id="one-command-with-a-profile"><strong>One command with a profile</strong></p>
 <p>The default Vivian cascade profile uses Qwen3.8-27B with thinking off on GPU 0 and Qwen3-ASR/Qwen3-TTS Base on GPU 1. The audio-file example in <code class="docutils literal notranslate"><span class="pre">examples/streaming_cascade/run.py</span></code> uses this profile when <code class="docutils literal notranslate"><span class="pre">--config</span></code> is omitted.</p>
+<p>It runs without speculative decoding:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span>--config<span class="w"> </span>examples/streaming_cascade/profiles/qwen3-asr-qwen3-tts-vivian/launch.yaml<span class="w"> </span>--enable-realtime<span class="w"> </span>--port<span class="w"> </span><span class="m">8765</span>
 </pre></div>
 </div>
+<p>To enable DFlash for chat and ASR, select the separate <code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-vivian-dflash</span></code> profile:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span>--config<span class="w"> </span>examples/streaming_cascade/profiles/qwen3-asr-qwen3-tts-vivian-dflash/launch.yaml<span class="w"> </span>--enable-realtime<span class="w"> </span>--port<span class="w"> </span><span class="m">8765</span>
+</pre></div>
+</div>
+<p>The DFlash profile uses the <code class="docutils literal notranslate"><span class="pre">incoai/Qwen3.8-27B-DFlash2</span></code> chat draft pinned to revision <code class="docutils literal notranslate"><span class="pre">015e795645c74b1a0eeef3b570031fb62e769bc5</span></code> and the ASR draft configured in <code class="docutils literal notranslate"><span class="pre">examples/configs/qwen3_asr_1_7b_dflash.yaml</span></code>. Both verify blocks of eight tokens. Qwen3-TTS has no speculative decoding adapter. The profile keeps the default profile’s GPU placement, memory fractions, ports and voice; the draft weights and caches also occupy GPU memory. Both profiles need the forced-alignment worker described above.</p>
+<p>Compared with the default profile, DFlash lowers the chat server’s effective maximum concurrent requests. Without FlashInfer AOT kernels, the first start can spend about nine minutes JIT-compiling FlashInfer’s <code class="docutils literal notranslate"><span class="pre">topk</span></code> module on H100; combined with model loading, this can exceed the 600 s service readiness timeout. Use AOT kernels or start the chat service separately and wait for readiness before launching the cascade.</p>
+<p>For a baseline comparison, select the default profile. For a chat-only comparison, copy the DFlash launch file and remove the ASR service’s <code class="docutils literal notranslate"><span class="pre">--config</span></code> argument and its value. Stop the services between configurations: an existing service on the same port is reused, so changing a launch file alone does not change its decoding settings. Use the repository’s <code class="docutils literal notranslate"><span class="pre">benchmarks.eval.benchmark_duplex_serving</span></code> with <code class="docutils literal notranslate"><span class="pre">--dataset</span> <span class="pre">v1.5</span> <span class="pre">--profile</span> <span class="pre">turn-based</span></code> as shown in v1.5 scoring, and set <code class="docutils literal notranslate"><span class="pre">--model</span></code> to the selected profile’s <code class="docutils literal notranslate"><span class="pre">model_path</span></code>. Its first-audio latency starts at <code class="docutils literal notranslate"><span class="pre">response.created</span></code>, after the ASR transcript opens the reply; evaluating ASR’s contribution also requires the speech-stop and transcription events in the recording’s <code class="docutils literal notranslate"><span class="pre">continuous.jsonl</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">--enable-realtime</span></code> mounts <code class="docutils literal notranslate"><span class="pre">/v1/realtime</span></code>, <code class="docutils literal notranslate"><span class="pre">/v1/realtime/capabilities</span></code> and <code class="docutils literal notranslate"><span class="pre">/v1/session</span></code>; without it the server starts the cascade but serves none of them.</p>
 <p>The server starts the profile’s <code class="docutils literal notranslate"><span class="pre">services</span></code> one after another, in the order they are listed, before it starts the cascade. For each entry it first requests <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:&lt;port&gt;/v1/models</span></code>: a service that answers 200 is reused and left running when the server stops, and the log shows <code class="docutils literal notranslate"><span class="pre">service</span> <span class="pre">'tts'</span> <span class="pre">already</span> <span class="pre">serving</span> <span class="pre">on</span> <span class="pre">:8005</span></code>. Otherwise it runs <code class="docutils literal notranslate"><span class="pre">command</span></code> with its own environment plus the entry’s <code class="docutils literal notranslate"><span class="pre">env</span></code>, in the directory <code class="docutils literal notranslate"><span class="pre">sgl-omni</span> <span class="pre">serve</span></code> was started from, and polls the port every second for up to 600 s. A service that exits first fails the start with <code class="docutils literal notranslate"><span class="pre">service</span> <span class="pre">'&lt;name&gt;'</span> <span class="pre">exited</span> <span class="pre">with</span> <span class="pre">code</span> <span class="pre">&lt;n&gt;</span> <span class="pre">before</span> <span class="pre">:&lt;port&gt;</span> <span class="pre">answered</span></code>; one that does not answer in time fails it with <code class="docutils literal notranslate"><span class="pre">service</span> <span class="pre">'&lt;name&gt;'</span> <span class="pre">did</span> <span class="pre">not</span> <span class="pre">answer</span> <span class="pre">on</span> <span class="pre">:&lt;port&gt;</span> <span class="pre">within</span> <span class="pre">600</span> <span class="pre">s</span></code>. The cascade itself must then start within <code class="docutils literal notranslate"><span class="pre">SGLANG_OMNI_STARTUP_TIMEOUT</span></code> seconds (default 600).</p>
 <p>While the server runs, a service it started that exits stops the server with <code class="docutils literal notranslate"><span class="pre">service</span> <span class="pre">'&lt;name&gt;'</span> <span class="pre">exited</span> <span class="pre">with</span> <span class="pre">code</span> <span class="pre">&lt;n&gt;</span></code>. Stopping the server sends SIGTERM to every service it started and SIGKILL to any still running 15 s later.</p>
@@ -1123,7 +1133,15 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
 <td><p>Alignment worker on 8010</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-streaming-qwen3-tts-vivian</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-vivian-dflash</span></code></p></td>
+<td><p>Qwen3-ASR-1.7B with DFlash on 8002</p></td>
+<td><p>Qwen3.8-27B with DFlash on 8000, thinking off</p></td>
+<td><p>Qwen3-TTS-12Hz-1.7B-Base on 8005, cloning <code class="docutils literal notranslate"><span class="pre">voices/vivian.wav</span></code></p></td>
+<td><p>2: the language model on GPU 0, both speech models on GPU 1</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
+<td><p>Alignment worker on 8010</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-streaming-qwen3-tts-vivian</span></code></p></td>
 <td><p>Qwen3-ASR-1.7B service on 8002 started with <code class="docutils literal notranslate"><span class="pre">--enable-realtime</span></code> (<code class="docutils literal notranslate"><span class="pre">streaming_transcription</span></code>, a partial transcript every 1000 ms of speech)</p></td>
 <td><p>Qwen3.8-27B on 8000, thinking off</p></td>
 <td><p>Qwen3-TTS-12Hz-1.7B-Base on 8005, cloning <code class="docutils literal notranslate"><span class="pre">voices/vivian.wav</span></code></p></td>
@@ -1131,7 +1149,7 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
 <td><p>Alignment worker on 8010</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-base-clone</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-base-clone</span></code></p></td>
 <td><p>Qwen3-ASR-1.7B service on 8002</p></td>
 <td><p>Qwen3-4B-Instruct-2507 on 8000</p></td>
 <td><p>Qwen3-TTS-12Hz-1.7B-Base on 8005, cloning <code class="docutils literal notranslate"><span class="pre">reference_zh.wav</span></code> in the profile directory</p></td>
@@ -1139,7 +1157,7 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">turn_detection</span></code> (published), <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced, recognizing the sentence at the cut, published)</p></td>
 <td><p>Alignment worker on 8010</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-qwen3-tts</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-qwen3-tts</span></code></p></td>
 <td><p>Nemotron 3.5 streaming ASR service on 8001 (<code class="docutils literal notranslate"><span class="pre">realtime_transcription</span></code>)</p></td>
 <td><p>Qwen3-4B-Instruct-2507 on 8000</p></td>
 <td><p>Qwen3-TTS-12Hz-0.6B-Base on 8004, cloning <code class="docutils literal notranslate"><span class="pre">reference.wav</span></code></p></td>
@@ -1147,7 +1165,7 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 <td><p><code class="docutils literal notranslate"><span class="pre">vad</span></code>, <code class="docutils literal notranslate"><span class="pre">asr</span></code>, <code class="docutils literal notranslate"><span class="pre">dialog</span></code>, <code class="docutils literal notranslate"><span class="pre">llm</span></code>, <code class="docutils literal notranslate"><span class="pre">tts</span></code>, <code class="docutils literal notranslate"><span class="pre">aligner</span></code> (forced)</p></td>
 <td><p>Alignment worker on 8010; a recording at <code class="docutils literal notranslate"><span class="pre">reference.wav</span></code>, with <code class="docutils literal notranslate"><span class="pre">reference_text</span></code> set to its transcript</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-stage-qwen3-tts</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">nemotron-stage-qwen3-tts</span></code></p></td>
 <td><p>Nemotron 3.5 ASR as the <code class="docutils literal notranslate"><span class="pre">asr</span></code> stage on GPU 0, with <code class="docutils literal notranslate"><span class="pre">running_transcript</span></code></p></td>
 <td><p>Qwen3-4B-Instruct-2507 on 8000</p></td>
 <td><p>Qwen3-TTS-12Hz-0.6B-Base on 8004, cloning <code class="docutils literal notranslate"><span class="pre">reference.wav</span></code></p></td>
@@ -1158,7 +1176,7 @@ hf<span class="w"> </span>download<span class="w"> </span>pipecat-ai/smart-turn-
 </tbody>
 </table>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-vivian</span></code> and <code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-base-clone</span></code> publish their aligner’s <code class="docutils literal notranslate"><span class="pre">session</span></code>, so their clients receive <code class="docutils literal notranslate"><span class="pre">sglang.response.progress</span></code>. Every profile cuts an interrupted reply at the word ends of the sentences whose audio was complete; the Qwen3-ASR profiles also send the delivered audio of the sentence at the cut to their own recognizer, so a sentence cut before its audio was complete keeps the part the listener heard.</p>
+<p><code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-vivian</span></code>, <code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-vivian-dflash</span></code> and <code class="docutils literal notranslate"><span class="pre">qwen3-asr-qwen3-tts-base-clone</span></code> publish their aligner’s <code class="docutils literal notranslate"><span class="pre">session</span></code>, so their clients receive <code class="docutils literal notranslate"><span class="pre">sglang.response.progress</span></code>. Every profile cuts an interrupted reply at the word ends of the sentences whose audio was complete; the Qwen3-ASR profiles also send the delivered audio of the sentence at the cut to their own recognizer, so a sentence cut before its audio was complete keeps the part the listener heard.</p>
 <p id="voice-conversation"><strong>Voice Conversation</strong></p>
 <p>With the page from Launching running, open <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8090</span></code>, speak, and the reply plays as it is produced. Speaking while the reply plays interrupts it.</p>
 <p>Any OpenAI Realtime client works the same way. Open a WebSocket to <code class="docutils literal notranslate"><span class="pre">/v1/realtime</span></code>, wait for <code class="docutils literal notranslate"><span class="pre">session.created</span></code>, and send the session settings:</p>
@@ -2693,36 +2711,47 @@ python<span class="w"> </span>-m<span class="w"> </span>benchmarks.duplex.fdb<sp
 <td><p>Sessions open at once, averaged over the level’s recording; the first and last sessions of a level have fewer neighbours</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sessions</span> <span class="pre">failed</span></code></p></td>
-<td><p>Sessions whose protocol replay failed or that broke off</p></td>
+<td><p>Runtime, protocol or cleanup failures, excluding clean final admission rejection</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">503</span></code>, <code class="docutils literal notranslate"><span class="pre">pacing</span> <span class="pre">violations</span></code></p></td>
-<td><p>Sessions denied admission, and sessions whose input drifted more than one 80 ms packet from its schedule. A pacing violation means the load generator fell behind, so the level does not measure the server</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">503</span> <span class="pre">/</span> <span class="pre">in-session</span></code></p></td>
+<td><p>Sessions affected by HTTP 503 and by in-session <code class="docutils literal notranslate"><span class="pre">admission_rejected</span></code>, respectively; a session can appear in both counts</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">unit</span> <span class="pre">miss</span></code></p></td>
-<td><p>Native profiles only. Units whose lag exceeds one nominal unit (1000 ms for MiniCPM-o), plus every unit of a failed session</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rejected</span></code></p></td>
+<td><p>Sessions whose complete trace shows final admission rejection without another failure</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">unit</span> <span class="pre">lag</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">affected</span></code>, <code class="docutils literal notranslate"><span class="pre">denial</span> <span class="pre">events</span></code></p></td>
+<td><p>Unique sessions encountering either rejection type, including recovered sessions; and total rejection events, including the final exhausted attempt</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pacing</span> <span class="pre">violations</span></code></p></td>
+<td><p>Sessions whose input drifted more than one 80 ms packet from its schedule. A pacing violation means the load generator fell behind, so the level does not measure the server</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">unit</span> <span class="pre">miss</span></code></p></td>
+<td><p>Native profiles only. Units whose lag exceeds one nominal unit (1000 ms for MiniCPM-o), plus every expected unit of a runtime or protocol failure. Final admission rejections are excluded from both missed and expected units; the rate is <code class="docutils literal notranslate"><span class="pre">-</span></code> when no expected units remain</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">unit</span> <span class="pre">lag</span></code></p></td>
 <td><p>Native profiles only. Receipt of <code class="docutils literal notranslate"><span class="pre">sglang.unit.done</span></code> minus the time the client finished sending the packet holding the unit’s last audio; the short last unit, which the server fills with silence, starts at the input end instead. On MiniCPM-o it matches the server-side <code class="docutils literal notranslate"><span class="pre">ready_to_finished_ms</span></code> of the request event recorder within a few milliseconds</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">first</span> <span class="pre">audio</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">first</span> <span class="pre">audio</span></code></p></td>
 <td><p>Native: from the unit carrying a reply’s first audio being ready to that audio’s receipt. Turn-based: from <code class="docutils literal notranslate"><span class="pre">response.created</span></code>, which arrives when the server ends the user’s turn, to the first audio</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">buffer</span> <span class="pre">needed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">buffer</span> <span class="pre">needed</span></code></p></td>
 <td><p>The smallest startup buffer with which a reply plays without a gap. It does not depend on <code class="docutils literal notranslate"><span class="pre">--playback-reserve-ms</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">underrun</span> <span class="pre">replies</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">underrun</span> <span class="pre">replies</span></code></p></td>
 <td><p>Replies that a player starting <code class="docutils literal notranslate"><span class="pre">--playback-reserve-ms</span></code> (80 ms by default) after their first audio would have to pause. This column depends on the reserve: at concurrency 8 on MiniCPM-o, 21 of 35 replies pause at 80 ms while <code class="docutils literal notranslate"><span class="pre">buffer</span> <span class="pre">needed</span></code> p90 is 251 ms</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">RTF</span> <span class="pre">p90</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">RTF</span> <span class="pre">p90</span></code></p></td>
 <td><p>Turn-based only. The time from a reply’s first to its last audio arrival over the audio before the last chunk. Native profiles show <code class="docutils literal notranslate"><span class="pre">-</span></code>, because a native reply comes out one unit per input unit and its factor stays near 1 whatever the load</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">meets</span> <span class="pre">targets</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">meets</span> <span class="pre">targets</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">yes</span></code>, or the targets the level misses</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>A level meets the targets when no session failed, no session was denied admission, no input pacing was violated, and, for native profiles, the unit miss rate is at most 1%, or, for turn-based profiles, the reply RTF p90 is below 1. A turn-based server’s unit receipts track input intake, so it is judged by how fast its replies stream. The capacity is the highest level below the first one that misses; when every recorded level meets the targets, the capacity is at least the highest one and a higher level has to be recorded.</p>
+<p>A level meets the targets when no session failed, no session was denied or rejected admission, no input pacing was violated, and, for native profiles, the unit miss rate is at most 1%, or, for turn-based profiles, the reply RTF p90 is below 1. A turn-based server’s unit receipts track input intake, so it is judged by how fast its replies stream. The capacity is the highest level below the first one that misses; when every recorded level meets the targets, the capacity is at least the highest one and a higher level has to be recorded.</p>
+<p>HTTP 503 and in-session rejection share <code class="docutils literal notranslate"><span class="pre">ADMISSION_RETRIES</span></code> retries after the initial attempt, with an <code class="docutils literal notranslate"><span class="pre">ADMISSION_BACKOFF_S</span></code> backoff (currently 3 retries and 0.25 seconds). These constants are defined in <code class="docutils literal notranslate"><span class="pre">benchmarks/duplex/client.py</span></code>. The manifest records the policy as <code class="docutils literal notranslate"><span class="pre">config.transport.admission_retries</span></code> and <code class="docutils literal notranslate"><span class="pre">admission_backoff_s</span></code>. In-session backoff can end early on abort. The recorder keeps the original rejection events; clean exhaustion is classified by replay rather than emitting an artificial runtime error. Interrupted or incomplete traces do not establish clean exhaustion. Older recordings used separate budgets for the two transports despite the same manifest field name, so replaying a mixed-retry recording under the shared-budget rule can change its verdict.</p>
+<p>Serving JSON retains <code class="docutils literal notranslate"><span class="pre">admission_denials</span></code> for HTTP-affected sessions and adds <code class="docutils literal notranslate"><span class="pre">sessions_with_admission_rejections</span></code> for in-session-affected sessions, <code class="docutils literal notranslate"><span class="pre">sessions_with_admission_events</span></code> for their union, and <code class="docutils literal notranslate"><span class="pre">sessions_rejected</span></code> for final rejections. <code class="docutils literal notranslate"><span class="pre">admission_denial_events</span></code> is the event total, split into <code class="docutils literal notranslate"><span class="pre">http_admission_denial_events</span></code> and <code class="docutils literal notranslate"><span class="pre">session_admission_rejection_events</span></code>. <code class="docutils literal notranslate"><span class="pre">sessions_failed</span></code> excludes variants classified with <code class="docutils literal notranslate"><span class="pre">failure_kind:</span> <span class="pre">admission_rejected</span></code>. Older run records without this classification retain their existing failure counts; older clients also omitted the final exhausted HTTP 503, which cannot be recovered from their traces.</p>
 <p>These are client-side times on the client’s host: they include the network to the server and leave out the player’s device and the acoustics. Where the time goes inside SGLang-Omni comes from the request event recorder instead; see <a class="reference internal" href="profiler.html#full-duplex-session-unit-metrics"><span class="std std-ref">Full Duplex session Unit metrics</span></a>.</p>
 <p id="minicpm-o-45-on-one-h100"><strong>MiniCPM-o 4.5 on one H100</strong></p>
 <p>One H100 80 GB ran a short v1.5 audio cohort with the native session protocol. Each recording selected the first 16 naturally sorted pairs from each of the four v1.5 subsets, including both clean and overlap variants: 128 sessions and 1,744 nominal input units per recording. The server allowed 64 session slots, but its memory pools were sized for this short cohort. A warmup pair was excluded. Each recording used a fresh client process against the same continuously running server.</p>
@@ -2860,55 +2889,58 @@ python<span class="w"> </span>-m<span class="w"> </span>benchmarks.eval.benchmar
 <tr class="row-even"><td><p>HTTP 503 in a record log</p></td>
 <td><p>Another client may hold the server’s sessions; check for competing recordings</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ERROR:</span> <span class="pre">CUDA_VISIBLE_DEVICES</span> <span class="pre">must</span> <span class="pre">list</span> <span class="pre">distinct</span> <span class="pre">numeric</span> <span class="pre">GPU</span> <span class="pre">indices</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">failure_kind:</span> <span class="pre">admission_rejected</span></code></p></td>
+<td><p>The shared retry budget was exhausted without admission. Inspect the HTTP and <code class="docutils literal notranslate"><span class="pre">admission_rejected</span></code> records for the cause; in-session <code class="docutils literal notranslate"><span class="pre">admission_rejected</span></code> is emitted only for <code class="docutils literal notranslate"><span class="pre">QueueFullError</span></code>. In a serving sweep this is part of the level’s result. Outside a serving sweep, lower <code class="docutils literal notranslate"><span class="pre">--concurrency</span></code> when the records indicate capacity pressure</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ERROR:</span> <span class="pre">CUDA_VISIBLE_DEVICES</span> <span class="pre">must</span> <span class="pre">list</span> <span class="pre">distinct</span> <span class="pre">numeric</span> <span class="pre">GPU</span> <span class="pre">indices</span></code></p></td>
 <td><p>Export indices such as <code class="docutils literal notranslate"><span class="pre">0</span></code> or <code class="docutils literal notranslate"><span class="pre">0,1</span></code>, not GPU UUIDs</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ERROR:</span> <span class="pre">--gpus</span> <span class="pre">...</span> <span class="pre">reaches</span> <span class="pre">outside</span> <span class="pre">CUDA_VISIBLE_DEVICES</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ERROR:</span> <span class="pre">--gpus</span> <span class="pre">...</span> <span class="pre">reaches</span> <span class="pre">outside</span> <span class="pre">CUDA_VISIBLE_DEVICES</span></code></p></td>
 <td><p>List only GPUs that <code class="docutils literal notranslate"><span class="pre">CUDA_VISIBLE_DEVICES</span></code> names, or widen it</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--device</span> <span class="pre">cuda</span> <span class="pre">needs</span> <span class="pre">exactly</span> <span class="pre">one</span> <span class="pre">visible</span> <span class="pre">GPU</span></code> (manual ASR command)</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--device</span> <span class="pre">cuda</span> <span class="pre">needs</span> <span class="pre">exactly</span> <span class="pre">one</span> <span class="pre">visible</span> <span class="pre">GPU</span></code> (manual ASR command)</p></td>
 <td><p>Export a single index for that command</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ERROR:</span> <span class="pre">GPU</span> <span class="pre">and</span> <span class="pre">CUDA_VISIBLE_DEVICES</span> <span class="pre">disagree</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ERROR:</span> <span class="pre">GPU</span> <span class="pre">and</span> <span class="pre">CUDA_VISIBLE_DEVICES</span> <span class="pre">disagree</span></code></p></td>
 <td><p>Unset <code class="docutils literal notranslate"><span class="pre">GPU</span></code>, or set it to the first index</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">a</span> <span class="pre">v1.5</span> <span class="pre">phase</span> <span class="pre">reported</span> <span class="pre">failures</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">a</span> <span class="pre">v1.5</span> <span class="pre">phase</span> <span class="pre">reported</span> <span class="pre">failures</span></code></p></td>
 <td><p>Rerun the command the warning prints; it adds <code class="docutils literal notranslate"><span class="pre">--retry-failed</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">the</span> <span class="pre">v1.0</span> <span class="pre">ASR</span> <span class="pre">failed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">the</span> <span class="pre">v1.0</span> <span class="pre">ASR</span> <span class="pre">failed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">repeat-N/v10/reference/logs/asr.log</span></code> has the official script’s output and the terminal has the traceback. A rerun of <code class="docutils literal notranslate"><span class="pre">asr</span></code> transcribes every v1.0 sample again</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">v1.0</span> <span class="pre">unified</span> <span class="pre">scoring</span> <span class="pre">failed</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">v1.0</span> <span class="pre">unified</span> <span class="pre">scoring</span> <span class="pre">failed</span></code></p></td>
 <td><p>ASR completed, but the saved export, transcript or annotation did not score. Fix the stated cause and run the CPU-only backfill command printed in the warning; it does not repeat ASR or v1.5 work. Rerun <code class="docutils literal notranslate"><span class="pre">aggregate</span></code> to refresh <code class="docutils literal notranslate"><span class="pre">RESULTS.md</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Unified</span> <span class="pre">metrics</span> <span class="pre">unavailable</span></code> in <code class="docutils literal notranslate"><span class="pre">RESULTS.md</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Unified</span> <span class="pre">metrics</span> <span class="pre">unavailable</span></code> in <code class="docutils literal notranslate"><span class="pre">RESULTS.md</span></code></p></td>
 <td><p>The report names a missing export/ASR file, missing output pair, stale hashes, unsupported version or incomplete subset. Repair the export or ASR if named, then use the per-repeat backfill command in the report and rerun <code class="docutils literal notranslate"><span class="pre">aggregate</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">the</span> <span class="pre">listening-quality</span> <span class="pre">phase</span> <span class="pre">failed</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">the</span> <span class="pre">listening-quality</span> <span class="pre">phase</span> <span class="pre">failed</span></code></p></td>
 <td><p>The terminal has the traceback. A <code class="docutils literal notranslate"><span class="pre">ModuleNotFoundError</span></code> for <code class="docutils literal notranslate"><span class="pre">s3prl</span></code> or <code class="docutils literal notranslate"><span class="pre">whisper</span></code> means the serving venv lacks the repository’s dependencies; reinstall them. Rerun <code class="docutils literal notranslate"><span class="pre">asr</span></code>; it recomputes the listening metrics in full</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">the</span> <span class="pre">v1.0</span> <span class="pre">evaluation</span> <span class="pre">failed</span> <span class="pre">for</span> <span class="pre">...</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WARNING:</span> <span class="pre">the</span> <span class="pre">v1.0</span> <span class="pre">evaluation</span> <span class="pre">failed</span> <span class="pre">for</span> <span class="pre">...</span></code></p></td>
 <td><p>The traceback is at the end of <code class="docutils literal notranslate"><span class="pre">repeat-N/v10/reference/logs/evaluate-&lt;subset&gt;.log</span></code>. A <code class="docutils literal notranslate"><span class="pre">ZeroDivisionError</span></code> in <code class="docutils literal notranslate"><span class="pre">candor_turn_taking</span></code> or <code class="docutils literal notranslate"><span class="pre">synthetic_user_interruption</span></code> means no selected sample took the turn, so select more samples in a new run. After fixing another cause, rerun <code class="docutils literal notranslate"><span class="pre">judge</span></code>; it evaluates the missing subsets again</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">judge</span> <span class="pre">request</span> <span class="pre">...</span> <span class="pre">got</span> <span class="pre">no</span> <span class="pre">parsable</span> <span class="pre">rating</span> <span class="pre">in</span> <span class="pre">3</span> <span class="pre">attempts</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">judge</span> <span class="pre">request</span> <span class="pre">...</span> <span class="pre">got</span> <span class="pre">no</span> <span class="pre">parsable</span> <span class="pre">rating</span> <span class="pre">in</span> <span class="pre">3</span> <span class="pre">attempts</span></code></p></td>
 <td><p>The v1.0 relevance judge answered without a rating; the ledger in <code class="docutils literal notranslate"><span class="pre">v10/reference/judge/</span></code> has each reply. The official parser needs <code class="docutils literal notranslate"><span class="pre">Analysis:</span> <span class="pre">&lt;text&gt;</span></code>, a line break, then <code class="docutils literal notranslate"><span class="pre">I</span> <span class="pre">would</span> <span class="pre">rate</span> <span class="pre">the</span> <span class="pre">AI's</span> <span class="pre">response</span> <span class="pre">as</span> <span class="pre">&lt;digit&gt;</span></code>. The attempts share a seed, so a local judge repeats the same reply and a rerun fails again</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">custom</span> <span class="pre">judge</span> <span class="pre">identity</span> <span class="pre">changed;</span> <span class="pre">use</span> <span class="pre">a</span> <span class="pre">new</span> <span class="pre">--out</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">custom</span> <span class="pre">judge</span> <span class="pre">identity</span> <span class="pre">changed;</span> <span class="pre">use</span> <span class="pre">a</span> <span class="pre">new</span> <span class="pre">--out</span></code></p></td>
 <td><p>The judge config changed since this repeat was judged, for example after an SGLang upgrade. Delete <code class="docutils literal notranslate"><span class="pre">repeat-N/judge-qwen</span></code> and rerun <code class="docutils literal notranslate"><span class="pre">judge</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Control</span> <span class="pre">check</span> <span class="pre">failed:</span> <span class="pre">this</span> <span class="pre">judge</span> <span class="pre">configuration</span> <span class="pre">is</span> <span class="pre">not</span> <span class="pre">accepted.</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Control</span> <span class="pre">check</span> <span class="pre">failed:</span> <span class="pre">this</span> <span class="pre">judge</span> <span class="pre">configuration</span> <span class="pre">is</span> <span class="pre">not</span> <span class="pre">accepted.</span></code></p></td>
 <td><p>The judge missed a control case, listed in the output; nothing graded alongside the controls is kept. Check that the judge server runs the pinned Qwen3.8-27B revision; do not grade with a configuration that fails the controls</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">...</span> <span class="pre">changed</span> <span class="pre">since</span> <span class="pre">this</span> <span class="pre">directory</span> <span class="pre">was</span> <span class="pre">created;</span> <span class="pre">use</span> <span class="pre">a</span> <span class="pre">new</span> <span class="pre">--out</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">...</span> <span class="pre">changed</span> <span class="pre">since</span> <span class="pre">this</span> <span class="pre">directory</span> <span class="pre">was</span> <span class="pre">created;</span> <span class="pre">use</span> <span class="pre">a</span> <span class="pre">new</span> <span class="pre">--out</span></code></p></td>
 <td><p>The semantic judge settings, prompt or inputs changed since this repeat was graded. Delete <code class="docutils literal notranslate"><span class="pre">repeat-N/semantic-qwen</span></code> and rerun <code class="docutils literal notranslate"><span class="pre">judge</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">model_mismatch</span></code> with <code class="docutils literal notranslate"><span class="pre">JUDGE=gpt</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">model_mismatch</span></code> with <code class="docutils literal notranslate"><span class="pre">JUDGE=gpt</span></code></p></td>
 <td><p>The endpoint answered with a model other than <code class="docutils literal notranslate"><span class="pre">gpt-4o-2024-08-06</span></code>; use an endpoint that serves exactly that model</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">No</span> <span class="pre">module</span> <span class="pre">named</span> <span class="pre">'onnx'</span></code> (or <code class="docutils literal notranslate"><span class="pre">einops</span></code>) in <code class="docutils literal notranslate"><span class="pre">model-server-gpu&lt;N&gt;.log</span></code>, or <code class="docutils literal notranslate"><span class="pre">ModuleNotFoundError</span></code> in <code class="docutils literal notranslate"><span class="pre">asr</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">No</span> <span class="pre">module</span> <span class="pre">named</span> <span class="pre">'onnx'</span></code> (or <code class="docutils literal notranslate"><span class="pre">einops</span></code>) in <code class="docutils literal notranslate"><span class="pre">model-server-gpu&lt;N&gt;.log</span></code>, or <code class="docutils literal notranslate"><span class="pre">ModuleNotFoundError</span></code> in <code class="docutils literal notranslate"><span class="pre">asr</span></code></p></td>
 <td><p>Rerun <code class="docutils literal notranslate"><span class="pre">setup</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">setup</span></code> stops with <code class="docutils literal notranslate"><span class="pre">torchcodec</span> <span class="pre">cannot</span> <span class="pre">load</span> <span class="pre">its</span> <span class="pre">FFmpeg</span> <span class="pre">libraries</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">setup</span></code> stops with <code class="docutils literal notranslate"><span class="pre">torchcodec</span> <span class="pre">cannot</span> <span class="pre">load</span> <span class="pre">its</span> <span class="pre">FFmpeg</span> <span class="pre">libraries</span></code></p></td>
 <td><p>Install the FFmpeg shared libraries (version 4 to 8) and rerun <code class="docutils literal notranslate"><span class="pre">setup</span></code></p></td>
 </tr>
 </tbody>
@@ -3382,7 +3414,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 06, 2026.
+  Last updated on Nov 09, 2026.
   <br/>
 </p>
   </div>

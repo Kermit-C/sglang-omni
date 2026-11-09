@@ -33,8 +33,8 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=a64801f4" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=a64801f4" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=3b484c19" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=3b484c19" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -51,7 +51,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'cookbook/qwen3_tts';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/sidebar_company_toggle.js?v=7622d557"></script>
+    <script src="../_static/js/sidebar_company_toggle.js?v=4014cbb0"></script>
     <script src="../_static/js/qwen3_omni_server_generator.js?v=d7738e8a"></script>
     <script src="../_static/js/ming_omni_server_generator.js?v=7979a72f"></script>
     <link rel="icon" href="../_static/logo.ico"/>
@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -208,21 +208,18 @@
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../index.html">Welcome to SGLang-Omni</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/apiserver_quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quickstart.html">Quickstart</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/examples.html">Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/troubleshooting.html">Troubleshooting</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Platforms</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Apple Silicon</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="../mlx/index.html">Native MLX / Voxt</a></li>
-</ul>
-</details></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Ascend NPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">Intel XPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">Intel CPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">Moore Threads MUSA</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_apple_silicon.html">Apple Silicon</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_npu.html">Ascend NPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_xpu.html">Intel XPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_cpu.html">Intel CPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../other_platforms/installation_musa.html">Moore Threads MUSA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
@@ -320,6 +317,11 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Reference</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/main.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/contribution_guide.html">Contribution Guide</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../developer_reference/mlx/index.html">Native MLX</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../developer_reference/mlx/long_audio.html">Qwen3-ASR long-recording measurements</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
@@ -1119,8 +1121,7 @@ Portuguese, Spanish, and Italian.</p>
 </section>
 <section id="streaming">
 <h3>Streaming<a class="headerlink" href="#streaming" title="Link to this heading">#</a></h3>
-<p>Set <code class="docutils literal notranslate"><span class="pre">&quot;stream&quot;:</span> <span class="pre">true</span></code> and <code class="docutils literal notranslate"><span class="pre">&quot;response_format&quot;:</span> <span class="pre">&quot;pcm&quot;</span></code> to receive raw PCM audio
-chunks in real time:</p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">&quot;stream&quot;:</span> <span class="pre">true</span></code> to receive raw audio chunks in real time. <code class="docutils literal notranslate"><span class="pre">stream_format</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">&quot;audio&quot;</span></code>, and <code class="docutils literal notranslate"><span class="pre">response_format</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">&quot;wav&quot;</span></code>. Set <code class="docutils literal notranslate"><span class="pre">response_format=&quot;pcm&quot;</span></code> for raw PCM bytes:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-N<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/v1/audio/speech<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
@@ -1140,6 +1141,7 @@ chunks in real time:</p>
 <p>Streaming returns <code class="docutils literal notranslate"><span class="pre">audio/pcm</span></code> 16-bit mono PCM bytes with sample-rate metadata in
 the response headers. See the <a class="reference internal" href="higgs_tts.html#streaming"><span class="std std-ref">Higgs TTS cookbook</span></a>
 for a full Python raw PCM consumer.</p>
+<p>Omit <code class="docutils literal notranslate"><span class="pre">response_format</span></code> or set it to <code class="docutils literal notranslate"><span class="pre">&quot;wav&quot;</span></code> for raw WAV streaming with one header followed by PCM chunks. Set <code class="docutils literal notranslate"><span class="pre">stream_format=&quot;sse&quot;</span></code> for SSE events, which can omit <code class="docutils literal notranslate"><span class="pre">stream=true</span></code>. Every HTTP mode defaults to WAV; an explicit <code class="docutils literal notranslate"><span class="pre">response_format</span></code> overrides that default.</p>
 <p>All three task types (Base/reference-cloning, CustomVoice and VoiceDesign) use
 true incremental codec and vocoder streaming, for both this HTTP endpoint and
 <code class="docutils literal notranslate"><span class="pre">/v1/audio/speech/stream</span></code> WebSocket sessions with <code class="docutils literal notranslate"><span class="pre">stream_audio=true</span></code>. Pass
@@ -1191,7 +1193,7 @@ process, since requests bind to its replicas round-robin. Raise
 <p>Intel XPU, CPU and Apple MPS decode synchronously by default. For NPU defaults
 and configuration, see <a class="reference internal" href="#ascend-npu-baseline"><span class="std std-ref">Ascend NPU baseline</span></a>.
 To opt in on Intel GPUs, follow the
-<a class="reference internal" href="../get_started/installation_xpu.html#qwen3-tts-text-to-speech-single-xpu"><span class="std std-ref">Qwen3-TTS XPU recipe</span></a>.</p>
+<a class="reference internal" href="../other_platforms/installation_xpu.html#qwen3-tts-text-to-speech-single-xpu"><span class="std std-ref">Qwen3-TTS XPU recipe</span></a>.</p>
 <p>Each follow-up batch sorts the stateful decoder’s cohorts, and the rows within
 each, by playback deadline: the nearest cohort launches first and its nearest
 rows fill the first graph-sized group. Left-context decodes keep queue order.
@@ -1284,9 +1286,17 @@ only the first chunk.</p>
 <td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
 <td><p>Random seed for reproducibility</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">stream</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">response_format</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">wav</span></code></p></td>
+<td><p>Explicit values override the default in every mode. HTTP streaming accepts <code class="docutils literal notranslate"><span class="pre">pcm</span></code> or <code class="docutils literal notranslate"><span class="pre">wav</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">stream</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>Stream raw PCM audio chunks</p></td>
+<td><p>Stream raw WAV audio chunks by default; set <code class="docutils literal notranslate"><span class="pre">response_format=&quot;pcm&quot;</span></code> for raw PCM</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">stream_format</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">audio</span></code></p></td>
+<td><p>Raw audio bytes by default; explicit <code class="docutils literal notranslate"><span class="pre">sse</span></code> enables SSE events even when <code class="docutils literal notranslate"><span class="pre">stream</span></code> is omitted</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">initial_codec_chunk_frames</span></code></p></td>
 <td><p>ramp <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">-&gt;</span> <span class="pre">2</span> <span class="pre">-&gt;</span> <span class="pre">4</span></code> when omitted</p></td>
@@ -1351,7 +1361,7 @@ quality) at a larger memory and latency cost; the 0.6B model is lighter and fast
 </table>
 </div>
 <p>Both released checkpoints provide <code class="docutils literal notranslate"><span class="pre">Serena</span></code>, <code class="docutils literal notranslate"><span class="pre">Vivian</span></code>, <code class="docutils literal notranslate"><span class="pre">Uncle_Fu</span></code>, <code class="docutils literal notranslate"><span class="pre">Ryan</span></code>, <code class="docutils literal notranslate"><span class="pre">Aiden</span></code>, <code class="docutils literal notranslate"><span class="pre">Ono_Anna</span></code>, <code class="docutils literal notranslate"><span class="pre">Sohee</span></code>, <code class="docutils literal notranslate"><span class="pre">Eric</span></code>, and <code class="docutils literal notranslate"><span class="pre">Dylan</span></code>. Speaker matching is case-insensitive; an omitted or <code class="docutils literal notranslate"><span class="pre">default</span></code> voice selects <code class="docutils literal notranslate"><span class="pre">Vivian</span></code>. <code class="docutils literal notranslate"><span class="pre">GET</span> <span class="pre">/v1/audio/voices</span></code> lists <code class="docutils literal notranslate"><span class="pre">default</span></code> and the served checkpoint’s speakers. Unknown speakers or supplied cloning fields return HTTP 400; uploaded reference voices are not used for CustomVoice synthesis.</p>
-<p>Both sizes support buffered speech, batch requests, incremental HTTP PCM output, and WebSocket audio output. HTTP streaming requires <code class="docutils literal notranslate"><span class="pre">stream=true</span></code> with <code class="docutils literal notranslate"><span class="pre">response_format=&quot;pcm&quot;</span></code>; WebSocket sessions use <code class="docutils literal notranslate"><span class="pre">stream_audio=true</span></code> with <code class="docutils literal notranslate"><span class="pre">response_format=&quot;pcm&quot;</span></code>.</p>
+<p>Both sizes support buffered speech, batch requests, incremental HTTP audio output, and WebSocket audio output. HTTP streaming uses <code class="docutils literal notranslate"><span class="pre">stream=true</span></code> and defaults to raw WAV; explicit <code class="docutils literal notranslate"><span class="pre">response_format=&quot;pcm&quot;</span></code> selects raw PCM. Set <code class="docutils literal notranslate"><span class="pre">stream_format=&quot;sse&quot;</span></code> for SSE events, which default to WAV. WebSocket sessions use <code class="docutils literal notranslate"><span class="pre">stream_audio=true</span></code> with <code class="docutils literal notranslate"><span class="pre">response_format=&quot;pcm&quot;</span></code>.</p>
 <p><strong>0.6B instruction compatibility:</strong> SGLang-Omni continues to pass optional <code class="docutils literal notranslate"><span class="pre">instructions</span></code> into the 0.6B prompt, preserving existing behavior. The released 0.6B model does not provide reliable instruction control; omit this field or use 1.7B when style control is needed.</p>
 <p><strong>Eric/Dylan language behavior:</strong> For both sizes, <code class="docutils literal notranslate"><span class="pre">language:</span> <span class="pre">Auto</span></code> selects Eric’s Sichuan dialect token or Dylan’s Beijing dialect token. An explicit language takes precedence: <code class="docutils literal notranslate"><span class="pre">language:</span> <span class="pre">Chinese</span></code> keeps the Chinese language token. This preserves existing SGLang-Omni behavior and differs from the QwenLM/Qwen3-TTS Python wrapper (<code class="docutils literal notranslate"><span class="pre">qwen-tts</span></code> 0.1.1), which also selects dialect tokens for <code class="docutils literal notranslate"><span class="pre">Chinese</span></code>. This is a conditioning choice, not a guarantee that the speaker’s accent disappears.</p>
 <p>Start the 1.7B checkpoint with its matching config:</p>
@@ -1678,7 +1688,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 06, 2026.
+  Last updated on Nov 09, 2026.
   <br/>
 </p>
   </div>
