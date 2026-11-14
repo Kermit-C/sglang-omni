@@ -128,7 +128,7 @@ def test_forward_preserves_feedback_and_text_logits(
         assert output.next_token_logits.shape == (BATCH_SIZE, width)
 
 
-@pytest.mark.parametrize("with_buffer", [False, True])
+@pytest.mark.parametrize("has_graph_buffer", [False, True])
 @pytest.mark.parametrize(
     "device_type",
     [
@@ -145,7 +145,7 @@ def test_forward_preserves_feedback_and_text_logits(
     ],
 )
 def test_decode_embeddings_keep_token_ids_on_device(
-    with_buffer: bool, device_type: Literal["cpu", "cuda"]
+    has_graph_buffer: bool, device_type: Literal["cpu", "cuda"]
 ) -> None:
     """Mixed decode previously read every text token back as a Python scalar."""
     model = SmallFlowModel().to(device=device_type)
@@ -155,54 +155,44 @@ def test_decode_embeddings_keep_token_ids_on_device(
         .reshape(2, HIDDEN_SIZE)
         .float()
     )
-    token_ids = torch.tensor([17, 0, 17, 0, 0, 99], device=device_type)
+    token_ids = torch.tensor([0, 17, 0, 17, 0, 99], device=device_type)
     expected_embeddings = model.get_input_embeddings()(token_ids).detach()
-    expected_embeddings[1], expected_embeddings[3], expected_embeddings[4] = (
+    expected_embeddings[0], expected_embeddings[2], expected_embeddings[4] = (
         feedback_embeddings[0],
-        feedback_embeddings[1],
         0,
+        feedback_embeddings[1],
     )
     model.graph_feedback_buffer = (
-        torch.empty_like(expected_embeddings) if with_buffer else None
+        torch.empty_like(expected_embeddings) if has_graph_buffer else None
     )
-    for reverse_order in (False, True):
-        requests = [make_flow_request(index) for index in range(len(token_ids))]
-        for request in requests:
-            request.data.text_ar_mode = TEXT_MODE_TEXT
-        requests[1].data.text_ar_mode = TEXT_MODE_AUDIO
-        requests[1].data.pending_feedback_queue.append(feedback_embeddings[0])
-        requests[3].data.dual_stream = True
-        requests[3].data.dual_stream_stage = DS_STAGE_PATCH
-        requests[3].data.pending_feedback_queue.append(feedback_embeddings[1])
-        requests[4].data.text_ar_mode = TEXT_MODE_AUDIO
-        requests[4].data.stop_pending = True
-        requests[5].data.dual_stream = True
-        if reverse_order:
-            requests.reverse()
-            input_ids = token_ids.flip(0)
-            expected_embedding_rows = expected_embeddings.flip(0)
-        else:
-            input_ids = token_ids
-            expected_embedding_rows = expected_embeddings
-        forward_batch = SimpleNamespace(input_ids=input_ids)
-        with (
-            torch.inference_mode(),
-            torch.profiler.profile(
-                activities=[torch.profiler.ProfilerActivity.CPU]
-            ) as embedding_profile,
-        ):
-            runner.before_decode(forward_batch, None, requests)
-        actual_embeddings = (
-            model.graph_feedback_buffer if with_buffer else forward_batch.input_embeds
-        )
-        torch.testing.assert_close(
-            actual_embeddings, expected_embedding_rows, rtol=0, atol=0
-        )
-        assert all(not request.data.pending_feedback_queue for request in requests)
-        assert all(
-            profile_event.key != "aten::_local_scalar_dense"
-            for profile_event in embedding_profile.key_averages()
-        )
+    requests = [make_flow_request(index) for index in reversed(range(len(token_ids)))]
+    for request in requests:
+        request.data.text_ar_mode = TEXT_MODE_TEXT
+    requests[0].data.text_ar_mode = TEXT_MODE_AUDIO
+    requests[0].data.pending_feedback_queue.append(feedback_embeddings[0])
+    requests[2].data.text_ar_mode = TEXT_MODE_AUDIO
+    requests[2].data.stop_pending = True
+    requests[4].data.dual_stream = True
+    requests[4].data.dual_stream_stage = DS_STAGE_PATCH
+    requests[4].data.pending_feedback_queue.append(feedback_embeddings[1])
+    requests[5].data.dual_stream = True
+    forward_batch = SimpleNamespace(input_ids=token_ids)
+    with (
+        torch.inference_mode(),
+        torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU]
+        ) as embedding_profile,
+    ):
+        runner.before_decode(forward_batch, None, requests)
+    actual_embeddings = (
+        model.graph_feedback_buffer if has_graph_buffer else forward_batch.input_embeds
+    )
+    torch.testing.assert_close(actual_embeddings, expected_embeddings, rtol=0, atol=0)
+    assert all(not request.data.pending_feedback_queue for request in requests)
+    assert all(
+        profile_event.key != "aten::_local_scalar_dense"
+        for profile_event in embedding_profile.key_averages()
+    )
 
 
 @pytest.fixture

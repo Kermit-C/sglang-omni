@@ -732,10 +732,10 @@ def test_speech_websocket_streaming_accepts_speed() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream_audio", [True, False])
-@pytest.mark.parametrize("native_speed", [True, False])
+@pytest.mark.parametrize("is_streaming_audio", [True, False])
+@pytest.mark.parametrize("is_native_speed", [True, False])
 async def test_speech_websocket_encodes_native_speed_only_once(
-    monkeypatch: pytest.MonkeyPatch, stream_audio: bool, native_speed: bool
+    monkeypatch: pytest.MonkeyPatch, is_streaming_audio: bool, is_native_speed: bool
 ) -> None:
     """Native acoustic editing must not be slowed again in either output path."""
     client = Client(coordinator=Mock())
@@ -754,16 +754,16 @@ async def test_speech_websocket_encodes_native_speed_only_once(
 
     monkeypatch.setattr(client, "generate", generate)
     validator_type = (
-        FireRedTTS3SpeechRequestValidator if native_speed else SpeechRequestValidator
+        FireRedTTS3SpeechRequestValidator if is_native_speed else SpeechRequestValidator
     )
     websocket = RecordingWebSocket()
     session = SpeechWebSocketSession(
         websocket, client=client, speech_service=validator_type(default_model="tts")
     )
     session.config = SpeechStreamSessionConfig(
-        model="tts", response_format="pcm", stream_audio=stream_audio, speed=0.8
+        model="tts", response_format="pcm", stream_audio=is_streaming_audio, speed=0.8
     )
-    if stream_audio:
+    if is_streaming_audio:
         await session.stream_sentence_audio(
             "Hello.", request_id="speech-ws", sentence_index=0
         )
@@ -772,7 +772,7 @@ async def test_speech_websocket_encodes_native_speed_only_once(
             "Hello.", request_id="speech-ws", sentence_index=0
         )
     sample_count = sum(len(chunk) for chunk in websocket.sent_bytes) // 2
-    assert sample_count == (24000 if native_speed else 30000)
+    assert sample_count == (24000 if is_native_speed else 30000)
 
 
 def test_speech_websocket_default_config_leaves_sampling_fields_unset() -> None:

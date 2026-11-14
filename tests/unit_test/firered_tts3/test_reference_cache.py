@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import io
 from pathlib import Path
+from typing import Literal
 from unittest.mock import patch
 
 import av
@@ -31,11 +32,13 @@ from tests.unit_test.fixtures.firered_tts3_preprocessing import (
 
 
 @pytest.mark.parametrize(
-    "task_type,use_data_uri",
+    "task_type,is_data_uri",
     [("Base", True), ("SemanticEdit", False), ("AcousticEdit", True)],
 )
 def test_compressed_reference_prompt_uses_encoded_audio_and_cache(
-    tmp_path: Path, task_type: str, use_data_uri: bool
+    tmp_path: Path,
+    task_type: Literal["Base", "SemanticEdit", "AcousticEdit"],
+    is_data_uri: bool,
 ) -> None:
     """AAC references must share the encoder's patch count without a second decode."""
     if not check_torchcodec_ready():
@@ -55,7 +58,7 @@ def test_compressed_reference_prompt_uses_encoded_audio_and_cache(
         for packet in audio_stream.encode():
             container.mux(packet)
     audio_bytes = encoded_audio.getvalue()
-    if use_data_uri:
+    if is_data_uri:
         reference_source = (
             f"data:audio/mp4;base64,{base64.b64encode(audio_bytes).decode('ascii')}"
         )

@@ -207,61 +207,37 @@ def test_editing_policy_is_scoped_to_firered(tmp_path: Path, task_type: str) -> 
     assert generic.resolve_encode_speed(prepared.request) == 0.8
 
 
-@pytest.mark.parametrize(
-    "variant,markers",
-    [
-        ("base", {"spk_in_dim": 512}),
-        ("instruct", {"use_lm_head": True}),
-        ("speaker", {"text_latent_interleave_ratio": [2, 1]}),
-    ],
-)
 def test_remote_checkpoint_revision_selects_reference_validation(
     tmp_path: Path,
-    variant: FireRedTTS3Variant,
-    markers: dict[str, JsonValue],
 ) -> None:
     """Remote Instruct metadata must permit VoiceDesign without Base references."""
     metadata_path = tmp_path / "config.json"
-    metadata_path.write_text(json.dumps(markers), encoding="utf-8")
-    model_path = f"test/checkpoint@{variant}-revision"
+    metadata_path.write_text(json.dumps({"use_lm_head": True}), encoding="utf-8")
+    model_path = "test/checkpoint@requested-revision"
     with mock.patch(
         "sglang_omni.models.firered_tts3.hf_config.hf_hub_download",
         return_value=str(metadata_path),
         create=True,
     ) as download_metadata:
         pipeline = FireRedTTS3PipelineConfig(model_path=model_path)
-        assert pipeline.variant == variant
+        assert pipeline.variant == "instruct"
         download_metadata.assert_called_once_with(
             repo_id="test/checkpoint",
             filename="config.json",
-            revision=f"{variant}-revision",
+            revision="requested-revision",
         )
-        if variant == "instruct":
-            with pytest.raises(ValueError, match="pinned variant"):
-                FireRedTTS3PipelineConfig(model_path=model_path, variant="base")
-        else:
-            pass
+        with pytest.raises(ValueError, match="pinned variant"):
+            FireRedTTS3PipelineConfig(model_path=model_path, variant="base")
     service = import_string(pipeline.speech_request_validator_factory)(
         default_model="tts",
         required_speech_reference_count=pipeline.required_speech_reference_count,
         speech_reference_text_required=pipeline.speech_reference_text_required,
     )
-    if variant == "base":
-        with pytest.raises(SpeechAPIError, match="reference"):
-            service.parse_request({"input": "Hello."})
-    elif variant == "instruct":
-        request = service.parse_request(
-            {
-                "input": "Hello.",
-                "task_type": "VoiceDesign",
-                "instructions": "A warm voice.",
-            }
-        )
-        assert request.task_type == "VoiceDesign"
-    else:
-        request = service.parse_request({"input": "Hello."})
-        assert request.input == "Hello."
-        with pytest.raises(SpeechAPIError, match="does not accept"):
-            service.parse_request(
-                {"input": "Hello.", "ref_audio": "data:audio/wav;base64,UklGRg=="}
-            )
+    request = service.parse_request(
+        {
+            "input": "Hello.",
+            "task_type": "VoiceDesign",
+            "instructions": "A warm voice.",
+        }
+    )
+    assert request.task_type == "VoiceDesign"

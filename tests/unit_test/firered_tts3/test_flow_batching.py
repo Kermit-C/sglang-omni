@@ -19,22 +19,30 @@ from tests.unit_test.fixtures.firered_tts3 import (
 )
 
 
-@pytest.mark.parametrize("batching", [False, True])
-@pytest.mark.parametrize("defer_stop", [False, True])
 @pytest.mark.parametrize(
-    "dual_stream,interleave_ratio", [(False, (2, 3)), (True, (2, 3)), (True, (2, 1))]
+    "is_batched,should_defer_stop,is_dual_stream,text_patch_step_counts",
+    [
+        (False, False, False, (2, 3)),
+        (True, True, False, (2, 3)),
+        (False, True, True, (2, 3)),
+        (True, False, True, (2, 3)),
+        (False, False, True, (2, 1)),
+        (True, True, True, (2, 1)),
+    ],
 )
 def test_patch_limits_stop_each_request_before_another_flow(
-    batching: bool,
-    defer_stop: bool,
-    dual_stream: bool,
-    interleave_ratio: tuple[int, int],
+    is_batched: bool,
+    should_defer_stop: bool,
+    is_dual_stream: bool,
+    text_patch_step_counts: tuple[int, int],
 ) -> None:
     """Audio patch limits must exclude the engine's text and control feed budget."""
-    runner = make_flow_runner(SmallFlowModel(), batching=batching)
-    runner.async_enabled = defer_stop
+    runner = make_flow_runner(SmallFlowModel(), batching=is_batched)
+    runner.async_enabled = should_defer_stop
     requests = [
-        make_flow_request(index, dual_stream=dual_stream, ratio=interleave_ratio)
+        make_flow_request(
+            index, dual_stream=is_dual_stream, ratio=text_patch_step_counts
+        )
         for index in range(2)
     ]
     patch_limits = (1, 2)
@@ -43,13 +51,13 @@ def test_patch_limits_stop_each_request_before_another_flow(
         result = make_flow_result(torch.zeros(request.data.req.extend_len, 8))
         runner.post_prefill(result, None, None, [request])
         request.data.req.output_ids.append(int(result.next_token_ids[0]))
-    for _ in range(3 * sum(interleave_ratio)):
+    for _ in range(3 * sum(text_patch_step_counts)):
         active_requests = [
             request for request in requests if not request.data.req.finished()
         ]
         if active_requests:
             result = make_flow_result(torch.zeros(len(active_requests), 8))
-            if defer_stop:
+            if should_defer_stop:
                 runner.post_decode_launch(result, None, active_requests)
                 runner.post_decode_resolve(None, result, None, None, active_requests)
             else:

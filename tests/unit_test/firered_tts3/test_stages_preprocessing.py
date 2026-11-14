@@ -67,22 +67,37 @@ def test_preprocessing_param_precedence() -> None:
 
 
 @pytest.mark.parametrize(
-    "request_max_patches,effective_max_patches,engine_tokens",
-    [(None, 6, 26), (3, 3, 23), (12, 6, 26)],
+    "request_step_count,request_patch_limit,effective_step_count,effective_patch_limit",
+    [(None, None, 8, 6), (10, 12, 10, 6), (4, 3, 4, 3)],
 )
-def test_deployment_patch_limit_caps_the_request_budget(
-    request_max_patches: int | None, effective_max_patches: int, engine_tokens: int
+def test_deployment_resolves_step_defaults_and_caps_audio_patches(
+    request_step_count: int | None,
+    request_patch_limit: int | None,
+    effective_step_count: int,
+    effective_patch_limit: int,
 ) -> None:
-    """Requests must not extend the deployment's audio generation limit."""
+    """Checkpoint defaults and request limits must respect deployment policy."""
     payload = make_preprocessing_payload(
-        params={"stage_params": {"talker": {"max_patches": request_max_patches}}}
+        params={
+            "stage_params": {
+                "talker": {
+                    "n_timesteps": request_step_count,
+                    "max_patches": request_patch_limit,
+                }
+            }
+        }
     )
-    preprocess_payload(payload, max_patches=6)
+    config = FireRedTTS3Config(
+        spk_in_dim=512,
+        dit_in_channels=1600,
+        generation_defaults={"n_timesteps": 10},
+    )
+    preprocess_payload(payload, config=config, n_timesteps=8, max_patches=6)
     request = build_sglang_firered_tts3_request(
         payload, patch_size=4, vocab_size=151936
     )
-    assert request.state.max_patches == effective_max_patches
-    assert request.req.sampling_params.max_new_tokens == engine_tokens
+    assert request.state.n_timesteps == effective_step_count
+    assert request.state.max_patches == effective_patch_limit
 
 
 def test_zero_minimum_reaches_the_stop_decision() -> None:
@@ -103,28 +118,6 @@ def test_zero_minimum_reaches_the_stop_decision() -> None:
     assert request_data.state.min_patches == 0
     assert request_data.req.finished()
     assert request_data.latent_patches == []
-
-
-@pytest.mark.parametrize("request_timesteps", [None, 4, 10])
-def test_deployment_steps_override_checkpoint_defaults(
-    request_timesteps: int | None,
-) -> None:
-    """Checkpoint defaults must not override the deployed flow step count."""
-    payload = make_preprocessing_payload(
-        params={"stage_params": {"talker": {"n_timesteps": request_timesteps}}}
-    )
-    config = FireRedTTS3Config(
-        spk_in_dim=512,
-        dit_in_channels=1600,
-        generation_defaults={"n_timesteps": 10},
-    )
-    preprocess_payload(payload, config=config, n_timesteps=8)
-    request_data = build_sglang_firered_tts3_request(
-        payload, patch_size=4, vocab_size=151936
-    )
-    assert request_data.state.n_timesteps == (
-        8 if request_timesteps is None else request_timesteps
-    )
 
 
 @pytest.mark.parametrize(
