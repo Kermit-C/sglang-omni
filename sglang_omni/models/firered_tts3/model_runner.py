@@ -6,7 +6,11 @@ from __future__ import annotations
 import time
 
 import torch
-from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN, ScheduleBatch
+from sglang.srt.managers.schedule_batch import (
+    FINISH_LENGTH,
+    FINISH_MATCHED_TOKEN,
+    ScheduleBatch,
+)
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardBatch
 
@@ -435,6 +439,11 @@ class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
     ) -> int:
         """Interleave text and patch feeds, checking stop after each final patch feed."""
         assert request_data.interleave_ratio is not None
+        if len(request_data.latent_patches) >= request_data.state.max_patches:
+            self.mark_stop(request_data, defer=defer_stop)
+            return CONTROL_TOKEN_ID
+        else:
+            pass
         text_step_count, patch_step_count = request_data.interleave_ratio
         if request_data.dual_stream_stage == DS_STAGE_TEXT:
             if request_data.dual_stream_step_index >= text_step_count - 1:
@@ -472,7 +481,11 @@ class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
         defer_stop: bool = False,
     ) -> None:
         """Check stop before generating the next patch in a non-interleaved request."""
-        if self.stop_predicted(request_data, hidden_states_float32):
+        if len(
+            request_data.latent_patches
+        ) >= request_data.state.max_patches or self.stop_predicted(
+            request_data, hidden_states_float32
+        ):
             self.mark_stop(request_data, defer=defer_stop)
             return
         else:
@@ -484,6 +497,10 @@ class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
         """Defer prefill and launch stops; decode may finish immediately."""
         if defer:
             request_data.stop_pending = True
+        elif len(request_data.latent_patches) >= request_data.state.max_patches:
+            request_data.req.finished_reason = FINISH_LENGTH(
+                request_data.state.max_patches
+            )
         else:
             request_data.req.finished_reason = FINISH_MATCHED_TOKEN(CONTROL_TOKEN_ID)
 
@@ -630,9 +647,7 @@ class FireRedTTS3ModelRunner(ModelRunner[FireRedTTS3SGLangRequestData]):
         if request_data.stop_pending:
             request_data.stop_pending = False
             if not request_data.req.is_retracted and (not request_data.req.finished()):
-                request_data.req.finished_reason = FINISH_MATCHED_TOKEN(
-                    CONTROL_TOKEN_ID
-                )
+                FireRedTTS3ModelRunner.mark_stop(request_data, defer=False)
             else:
                 pass
         else:

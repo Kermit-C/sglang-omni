@@ -1,16 +1,100 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reference encoding cache behavior."""
 
-from pathlib import Path
+from __future__ import annotations
 
+import base64
+import io
+from pathlib import Path
+from unittest.mock import patch
+
+import av
+import numpy as np
+import pytest
 import torch
 
+from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
+from sglang_omni.models.firered_tts3.payload_types import load_firered_tts3_state
 from sglang_omni.models.firered_tts3.ref_encode import (
     FireRedReferenceHook,
     ReferenceAudioInput,
     ReferenceConditioning,
 )
 from sglang_omni.scheduling.reference_encoder import ReferenceEncodeService
+from sglang_omni.utils.audio import check_torchcodec_ready, load_audio
+from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
+from tests.unit_test.fixtures.firered_tts3_preprocessing import (
+    make_preprocessing_payload,
+    make_reference_encoder,
+    preprocess_payload,
+)
+
+
+@pytest.mark.parametrize(
+    "task_type,use_data_uri",
+    [("Base", True), ("SemanticEdit", False), ("AcousticEdit", True)],
+)
+def test_compressed_reference_prompt_uses_encoded_audio_and_cache(
+    tmp_path: Path, task_type: str, use_data_uri: bool
+) -> None:
+    """AAC references must share the encoder's patch count without a second decode."""
+    if not check_torchcodec_ready():
+        pytest.skip("AAC decoding requires TorchCodec and FFmpeg")
+    else:
+        pass
+    encoded_audio = io.BytesIO()
+    with av.open(encoded_audio, mode="w", format="mp4") as container:
+        audio_stream = container.add_stream("aac", rate=16000)
+        audio_stream.layout = "stereo"
+        frame = av.AudioFrame.from_ndarray(
+            np.zeros((2, 4097), dtype=np.float32), format="fltp", layout="stereo"
+        )
+        frame.sample_rate = 16000
+        for packet in audio_stream.encode(frame):
+            container.mux(packet)
+        for packet in audio_stream.encode():
+            container.mux(packet)
+    audio_bytes = encoded_audio.getvalue()
+    if use_data_uri:
+        reference_source = (
+            f"data:audio/mp4;base64,{base64.b64encode(audio_bytes).decode('ascii')}"
+        )
+    else:
+        reference_path = tmp_path / "reference.m4a"
+        reference_path.write_bytes(audio_bytes)
+        reference_source = str(reference_path)
+    config = FireRedTTS3Config(use_lm_head=True)
+    tokenizer = make_speaker_tokenizer()
+    with make_reference_encoder(config) as reference_encoder:
+        with patch(
+            "sglang_omni.models.firered_tts3.ref_encode.load_audio", wraps=load_audio
+        ) as decode_reference:
+            for _ in range(2):
+                payload = make_preprocessing_payload(
+                    inputs={
+                        "text": "hello" if task_type == "Base" else "",
+                        "task_type": task_type,
+                        "instructions": "Replace 'birthday' with 'anniversary'.",
+                        "references": [
+                            {"audio_path": reference_source, "text": "source text"}
+                        ],
+                    }
+                )
+                preprocess_payload(payload, config=config, tokenizer=tokenizer)
+                state = load_firered_tts3_state(
+                    reference_encoder.encode_payload(payload)
+                )
+                if task_type == "Base":
+                    reference_latents = state.prompt_latents
+                    pad_token = "<|video_pad|>"
+                else:
+                    reference_latents = state.audio_in_latents
+                    pad_token = "<|image_pad|>"
+                assert reference_latents is not None
+                assert state.input_ids.count(
+                    tokenizer.convert_tokens_to_ids(pad_token)
+                ) == (reference_latents.shape[1] // config.patch_size)
+            assert decode_reference.call_count == 1
 
 
 class ReferenceEncoderStub:

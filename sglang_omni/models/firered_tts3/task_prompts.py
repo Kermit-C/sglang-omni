@@ -4,19 +4,10 @@
 
 from __future__ import annotations
 
-import base64
-import io
-import math
-from urllib.request import urlopen
-
-import soundfile as sf
-import torch
-import torchaudio
 from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
 from sglang_omni.models.firered_tts3.payload_types import (
-    MAX_EDIT_SECONDS,
     FireRedTTS3State,
     FireRedTTS3TaskType,
     first_not_none,
@@ -26,9 +17,6 @@ from sglang_omni.models.firered_tts3.payload_types import (
 )
 from sglang_omni.utils.json import JsonValue
 
-AUDIO_SAMPLE_RATE = 24000
-AUDIO_URL_TIMEOUT_SECONDS = 60
-SAMPLES_PER_PATCH = 3840
 ACOUSTIC_ATTRIBUTES = ("Speed", "Pitch", "Volume")
 CHATML_LATENT_IN_PAD_SYM = "<|image_pad|>"
 CHATML_LATENT_OUT_PAD_SYM = "<|video_pad|>"
@@ -110,42 +98,6 @@ def convert_to_chatml(
         f"<|im_start|>user\n{audio_input}{input_text} /no_think<|im_end|>\n"
         f"<|im_start|>assistant\n<think>\n\n</think>\n\n{output_text}{audio_output}<|im_end|>\n"
     )
-
-
-def count_audio_patches(audio_path: str, *, cap_seconds: float | None) -> int:
-    """Count prompt slots after clipping and resampling the reference audio."""
-    # note (kermit): Prompt counting preserves its URL timeout and SoundFile error contract.
-    audio_source: str | io.BytesIO
-    if audio_path.startswith(("http://", "https://")):
-        with urlopen(audio_path, timeout=AUDIO_URL_TIMEOUT_SECONDS) as response:
-            audio_source = io.BytesIO(response.read())
-    elif audio_path.startswith("data:"):
-        _, _, encoded_audio = audio_path.partition(",")
-        audio_source = io.BytesIO(base64.b64decode(encoded_audio))
-    else:
-        audio_source = audio_path
-    waveform_samples, sample_rate = sf.read(audio_source, dtype="float32")
-    if waveform_samples.ndim > 1:
-        waveform_samples = waveform_samples.mean(axis=1)
-    else:
-        pass
-    waveform = torch.from_numpy(waveform_samples)
-    if cap_seconds is not None:
-        waveform = waveform[..., : int(sample_rate * cap_seconds)]
-    else:
-        pass
-    if waveform.ndim == 1:
-        waveform = waveform.unsqueeze(0)
-    else:
-        pass
-    waveform = waveform[:1].float()
-    if sample_rate != AUDIO_SAMPLE_RATE:
-        waveform = torchaudio.functional.resample(
-            waveform, sample_rate, AUDIO_SAMPLE_RATE
-        )
-    else:
-        pass
-    return math.ceil(waveform.shape[1] / SAMPLES_PER_PATCH)
 
 
 def resolve_acoustic_instruction(
@@ -267,6 +219,7 @@ def compose_instruct_state(
     prompt_audio_path: str | None = None
     audio_input_path: str | None = None
     prompt_text: str | None = None
+    reference_pad_token_id: int | None = None
     if task_type == "tts":
         if not text.strip():
             raise ValueError("FireRedTTS3 tts requires non-empty input text")
@@ -286,10 +239,12 @@ def compose_instruct_state(
             pass
         prompt_audio_path = reference_audio
         prompt_text = str(prompt_text_value).strip()
-        prompt_patch_count = count_audio_patches(prompt_audio_path, cap_seconds=None)
+        reference_pad_token_id = tokenizer.convert_tokens_to_ids(
+            CHATML_LATENT_OUT_PAD_SYM
+        )
         prompt_template = convert_to_chatml(
             input_text=f"Convert text to speech.\n{prompt_text}{text.strip()}",
-            audio_output_patch_count=prompt_patch_count,
+            audio_output_patch_count=1,
         ).removesuffix("<|eosp|>\n<|im_end|>\n")
     elif task_type == "voice_design":
         if not text.strip():
@@ -310,12 +265,12 @@ def compose_instruct_state(
         else:
             pass
         audio_input_path = require_edit_source(reference_audio, task_type)
-        audio_input_patch_count = count_audio_patches(
-            audio_input_path, cap_seconds=MAX_EDIT_SECONDS
+        reference_pad_token_id = tokenizer.convert_tokens_to_ids(
+            CHATML_LATENT_IN_PAD_SYM
         )
         prompt_template = convert_to_chatml(
             input_text=f"Identify the content of the audio. {instruction_text.strip()}",
-            audio_input_patch_count=audio_input_patch_count,
+            audio_input_patch_count=1,
             output_text="<|sot|>",
         ).removesuffix("<|im_end|>\n")
     elif task_type == "acoustic_edit":
@@ -323,12 +278,12 @@ def compose_instruct_state(
         instruction = resolve_acoustic_instruction(
             instruction_text, tts_parameters, preprocessing_parameters
         )
-        audio_input_patch_count = count_audio_patches(
-            audio_input_path, cap_seconds=MAX_EDIT_SECONDS
+        reference_pad_token_id = tokenizer.convert_tokens_to_ids(
+            CHATML_LATENT_IN_PAD_SYM
         )
         prompt_template = convert_to_chatml(
             input_text=instruction,
-            audio_input_patch_count=audio_input_patch_count,
+            audio_input_patch_count=1,
             audio_output_patch_count=1,
         ).removesuffix("<|video_pad|><|eosp|>\n<|im_end|>\n")
     else:
@@ -346,6 +301,7 @@ def compose_instruct_state(
         instructions=instruction_text,
         audio_in_path=audio_input_path,
         input_ids=tokenizer(prompt_template, add_special_tokens=False)["input_ids"],
+        reference_pad_token_id=reference_pad_token_id,
         text_temperature=text_temperature,
         text_top_p=text_top_p,
         text_top_k=text_top_k,

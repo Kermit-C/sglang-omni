@@ -7,16 +7,26 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+import torch
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
+from sglang_omni.models.firered_tts3.payload_types import load_firered_tts3_state
 from sglang_omni.models.firered_tts3.request_builders import (
     build_sglang_firered_tts3_request,
 )
 from sglang_omni.proto.request import StagePayload
+from sglang_omni.scheduling.types import SchedulerRequest
 from sglang_omni.utils.json import JsonValue
-from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
+from tests.unit_test.fixtures.firered_tts3 import (
+    SmallFlowModel,
+    make_flow_request,
+    make_flow_result,
+    make_flow_runner,
+    make_speaker_tokenizer,
+)
 from tests.unit_test.fixtures.firered_tts3_preprocessing import (
     make_preprocessing_payload,
+    make_reference_encoder,
     preprocess_payload,
 )
 
@@ -54,6 +64,67 @@ def test_preprocessing_param_precedence() -> None:
     assert request.state.seed == 7
     assert request.state.inference_cfg == 1.5
     assert request.state.stop_threshold == 0.7
+
+
+@pytest.mark.parametrize(
+    "request_max_patches,effective_max_patches,engine_tokens",
+    [(None, 6, 26), (3, 3, 23), (12, 6, 26)],
+)
+def test_deployment_patch_limit_caps_the_request_budget(
+    request_max_patches: int | None, effective_max_patches: int, engine_tokens: int
+) -> None:
+    """Requests must not extend the deployment's audio generation limit."""
+    payload = make_preprocessing_payload(
+        params={"stage_params": {"talker": {"max_patches": request_max_patches}}}
+    )
+    preprocess_payload(payload, max_patches=6)
+    request = build_sglang_firered_tts3_request(
+        payload, patch_size=4, vocab_size=151936
+    )
+    assert request.state.max_patches == effective_max_patches
+    assert request.req.sampling_params.max_new_tokens == engine_tokens
+
+
+def test_zero_minimum_reaches_the_stop_decision() -> None:
+    """An explicit zero minimum must survive the stage handoff to the stop head."""
+    payload = make_preprocessing_payload(
+        params={"stage_params": {"talker": {"min_patches": 0, "stop_threshold": 0.0}}}
+    )
+    preprocess_payload(payload)
+    request_data = build_sglang_firered_tts3_request(
+        payload, patch_size=4, vocab_size=151936
+    )
+    prepared_request = make_flow_request()
+    request_data.flow_state = prepared_request.data.flow_state
+    request_data.probe = prepared_request.data.probe
+    request = SchedulerRequest(request_id=payload.request_id, data=request_data)
+    runner = make_flow_runner(SmallFlowModel())
+    runner.post_decode(make_flow_result(torch.zeros(1, 8)), None, None, [request])
+    assert request_data.state.min_patches == 0
+    assert request_data.req.finished()
+    assert request_data.latent_patches == []
+
+
+@pytest.mark.parametrize("request_timesteps", [None, 4, 10])
+def test_deployment_steps_override_checkpoint_defaults(
+    request_timesteps: int | None,
+) -> None:
+    """Checkpoint defaults must not override the deployed flow step count."""
+    payload = make_preprocessing_payload(
+        params={"stage_params": {"talker": {"n_timesteps": request_timesteps}}}
+    )
+    config = FireRedTTS3Config(
+        spk_in_dim=512,
+        dit_in_channels=1600,
+        generation_defaults={"n_timesteps": 10},
+    )
+    preprocess_payload(payload, config=config, n_timesteps=8)
+    request_data = build_sglang_firered_tts3_request(
+        payload, patch_size=4, vocab_size=151936
+    )
+    assert request_data.state.n_timesteps == (
+        8 if request_timesteps is None else request_timesteps
+    )
 
 
 @pytest.mark.parametrize(
@@ -295,18 +366,21 @@ def test_instruct_preprocessing_routes_tasks_to_model_prompts(
     sf.write(audio_path, np.zeros(69120, dtype=np.float32), 24000, subtype="FLOAT")
     is_edit = task in ("SemanticEdit", "AcousticEdit")
     tokenizer = make_speaker_tokenizer()
-    state = preprocess_payload(
-        instruct_payload(
-            task_type=None if task == "tts" else task,
-            instructions=instructions,
-            text="" if is_edit else "晚上好，欢迎收听今天的节目。",
-            reference_audio_path=audio_path if task != "VoiceDesign" else None,
-            params=params,
-            tts_params=tts_params,
-        ),
+    payload = instruct_payload(
+        task_type=None if task == "tts" else task,
+        instructions=instructions,
+        text="" if is_edit else "晚上好，欢迎收听今天的节目。",
+        reference_audio_path=audio_path if task != "VoiceDesign" else None,
+        params=params,
+        tts_params=tts_params,
+    )
+    preprocess_payload(
+        payload,
         tokenizer=tokenizer,
         config=INSTRUCT_CONFIG,
     )
+    with make_reference_encoder(INSTRUCT_CONFIG) as reference_encoder:
+        state = load_firered_tts3_state(reference_encoder.encode_payload(payload))
     audio_input = "<|sosp|>" + "<|image_pad|>" * 18 + "<|eosp|>\n" if is_edit else ""
     if task == "tts":
         assistant_prefix = "<|sosp|>" + "<|video_pad|>" * 18

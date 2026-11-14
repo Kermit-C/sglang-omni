@@ -247,6 +247,24 @@ class FireRedReferenceEncoder:
             state.audio_in_latents = artifact["prompt_latents"]
         else:
             pass
+        if state.reference_pad_token_id is not None:
+            reference_latents = (
+                state.prompt_latents
+                if state.task_type == "tts"
+                else state.audio_in_latents
+            )
+            assert reference_latents is not None
+            assert reference_latents.shape[1] % self.bundle.config.patch_size == 0
+            reference_patch_count = (
+                reference_latents.shape[1] // self.bundle.config.patch_size
+            )
+            reference_pad_position = state.input_ids.index(state.reference_pad_token_id)
+            state.input_ids[reference_pad_position : reference_pad_position + 1] = [
+                state.reference_pad_token_id
+            ] * reference_patch_count
+            state.reference_pad_token_id = None
+        else:
+            pass
         return store_firered_tts3_state(payload, state)
 
 

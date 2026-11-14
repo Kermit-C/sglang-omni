@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
+from sglang.srt.managers.schedule_batch import FINISH_LENGTH, FINISH_MATCHED_TOKEN
 
 from sglang_omni.models.firered_tts3.request_builders import CONTROL_TOKEN_ID
 from sglang_omni.scheduling.types import SchedulerRequest
@@ -17,6 +17,54 @@ from tests.unit_test.fixtures.firered_tts3 import (
     make_flow_result,
     make_flow_runner,
 )
+
+
+@pytest.mark.parametrize("batching", [False, True])
+@pytest.mark.parametrize("defer_stop", [False, True])
+@pytest.mark.parametrize(
+    "dual_stream,interleave_ratio", [(False, (2, 3)), (True, (2, 3)), (True, (2, 1))]
+)
+def test_patch_limits_stop_each_request_before_another_flow(
+    batching: bool,
+    defer_stop: bool,
+    dual_stream: bool,
+    interleave_ratio: tuple[int, int],
+) -> None:
+    """Audio patch limits must exclude the engine's text and control feed budget."""
+    runner = make_flow_runner(SmallFlowModel(), batching=batching)
+    runner.async_enabled = defer_stop
+    requests = [
+        make_flow_request(index, dual_stream=dual_stream, ratio=interleave_ratio)
+        for index in range(2)
+    ]
+    patch_limits = (1, 2)
+    for request, patch_limit in zip(requests, patch_limits, strict=True):
+        request.data.state.max_patches = patch_limit
+        result = make_flow_result(torch.zeros(request.data.req.extend_len, 8))
+        runner.post_prefill(result, None, None, [request])
+        request.data.req.output_ids.append(int(result.next_token_ids[0]))
+    for _ in range(3 * sum(interleave_ratio)):
+        active_requests = [
+            request for request in requests if not request.data.req.finished()
+        ]
+        if active_requests:
+            result = make_flow_result(torch.zeros(len(active_requests), 8))
+            if defer_stop:
+                runner.post_decode_launch(result, None, active_requests)
+                runner.post_decode_resolve(None, result, None, None, active_requests)
+            else:
+                runner.post_decode(result, None, None, active_requests)
+            for request, token_id in zip(
+                active_requests, result.next_token_ids, strict=True
+            ):
+                request.data.req.output_ids.append(int(token_id))
+        else:
+            break
+        for request, patch_limit in zip(requests, patch_limits, strict=True):
+            assert len(request.data.latent_patches) <= patch_limit
+    for request, patch_limit in zip(requests, patch_limits, strict=True):
+        assert len(request.data.latent_patches) == patch_limit
+        assert isinstance(request.data.req.finished_reason, FINISH_LENGTH)
 
 
 @pytest.mark.parametrize(
@@ -111,7 +159,7 @@ def test_async_stop_resolves_only_the_owned_request(status: str) -> None:
 
 @pytest.mark.parametrize("pause_steps", [(2, 3), (2, 2), (3, 3)])
 def test_dual_batching_runs_only_patch_producing_requests(
-    pause_steps: tuple[int, int]
+    pause_steps: tuple[int, int],
 ) -> None:
     """Stop-check rows must not enter the flow batch or receive another request's patch."""
     model = SmallFlowModel()

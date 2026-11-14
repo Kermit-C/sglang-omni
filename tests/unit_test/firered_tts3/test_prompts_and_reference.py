@@ -4,17 +4,13 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import io
 from collections.abc import Iterator
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import Literal
 from unittest.mock import patch
-from urllib.error import HTTPError
-from urllib.request import urlopen
 
 import numpy as np
 import pytest
@@ -23,6 +19,7 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from sglang_omni.models.firered_tts3.hf_config import FireRedTTS3Config
+from sglang_omni.models.firered_tts3.ref_encode import FireRedReferenceBundle
 from sglang_omni.models.firered_tts3.request_builders import (
     build_sglang_firered_tts3_request,
 )
@@ -31,14 +28,12 @@ from sglang_omni.models.firered_tts3.speaker_prompts import (
     encode_speaker_text,
     resolve_speaker_token_id,
 )
-from sglang_omni.models.firered_tts3.task_prompts import (
-    count_audio_patches,
-    resolve_acoustic_instruction,
-)
+from sglang_omni.models.firered_tts3.task_prompts import resolve_acoustic_instruction
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.utils.json import JsonValue
 from tests.unit_test.fixtures.firered_tts3 import make_speaker_tokenizer
 from tests.unit_test.fixtures.firered_tts3_preprocessing import (
+    ReferenceLatentEncoder,
     make_preprocessing_payload,
     preprocess_payload,
 )
@@ -93,7 +88,7 @@ def test_speaker_text_expands_han_tokens_and_preserves_unknown_characters(
         (44100, 7056, None, 1),
         (44100, 7057, None, 2),
         (16000, 320001, 20.0, 125),
-        (16000, 2561, 0.16005, 1),
+        (16000, 2561, 0.16005, 2),
     ],
 )
 def test_audio_prompt_slots_follow_resampled_patch_boundaries(
@@ -105,7 +100,7 @@ def test_audio_prompt_slots_follow_resampled_patch_boundaries(
     cap_seconds: float | None,
     expected_patches: int,
 ) -> None:
-    """Clip before resampling so fractional caps cannot add a prompt slot."""
+    """Reference frames must reflect the normalized, capped, patch-padded audio."""
     encoded_audio = io.BytesIO()
     sf.write(
         encoded_audio,
@@ -118,44 +113,22 @@ def test_audio_prompt_slots_follow_resampled_patch_boundaries(
     audio_path = tmp_path / "reference.wav"
     audio_path.write_bytes(audio_bytes)
     audio_uri = f"data:audio/wav;base64,{base64.b64encode(audio_bytes).decode('ascii')}"
-    permissive_audio_uri = (
-        f"data:audio/wav,{base64.b64encode(audio_bytes).decode('ascii')}\n"
-    )
     audio_url = f"{audio_server_url}/reference.wav"
     monkeypatch.setenv("REQUEST_TIMEOUT", "1")
     with patch(
-        "sglang_omni.models.firered_tts3.task_prompts.urlopen", wraps=urlopen
-    ) as open_audio_url:
-        for reference in (str(audio_path), audio_uri, permissive_audio_uri, audio_url):
-            assert (
-                count_audio_patches(reference, cap_seconds=cap_seconds)
-                == expected_patches
-            )
-        open_audio_url.assert_called_once_with(audio_url, timeout=60)
-
-
-@pytest.mark.parametrize(
-    "source,expected_error",
-    [("http", HTTPError), ("file", sf.LibsndfileError), ("data_uri", binascii.Error)],
-)
-def test_audio_prompt_count_preserves_source_errors(
-    tmp_path: Path,
-    audio_server_url: str,
-    source: Literal["http", "file", "data_uri"],
-    expected_error: type[Exception],
-) -> None:
-    """Source failures retain their HTTP, SoundFile, or base64 exception type."""
-    if source == "http":
-        audio_source = f"{audio_server_url}/missing.wav"
-    elif source == "file":
-        audio_path = tmp_path / "invalid.wav"
-        audio_path.write_bytes(b"invalid audio")
-        audio_source = str(audio_path)
-    else:
-        audio_source = "data:audio/wav;base64,YQ"
-    with pytest.raises(expected_error) as failure:
-        count_audio_patches(audio_source, cap_seconds=None)
-    assert type(failure.value) is expected_error
+        "sglang_omni.models.firered_tts3.ref_encode.load_redae_encoder",
+        return_value=ReferenceLatentEncoder(FireRedTTS3Config()),
+    ):
+        bundle = FireRedReferenceBundle(
+            "unused", FireRedTTS3Config(use_lm_head=True), "cpu"
+        )
+    for reference in (str(audio_path), audio_uri, audio_url):
+        artifact = bundle.encode(reference, max_seconds=cap_seconds)
+        assert artifact["prompt_latents"].shape == (
+            1,
+            expected_patches * bundle.config.patch_size,
+            bundle.config.redae_dim,
+        )
 
 
 def test_compose_acoustic_instruction_templates() -> None:

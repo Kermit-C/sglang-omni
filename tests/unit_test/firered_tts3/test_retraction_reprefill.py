@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import torch
-from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
+from sglang.srt.managers.schedule_batch import FINISH_LENGTH, FINISH_MATCHED_TOKEN
 from sglang.srt.managers.utils import GenerationBatchResult
 
 from sglang_omni.models.firered_tts3.embeddings import text_output_token_count
@@ -235,7 +235,11 @@ def test_dual_reprefill_matches_uninterrupted_decode_at_every_pause(
 
 
 @pytest.mark.parametrize("dual", [False, True])
-def test_prefill_stop_finishes_on_next_sync_decode(dual: bool) -> None:
+@pytest.mark.parametrize("stop_source", ["head", "limit"])
+def test_prefill_stop_finishes_on_next_sync_decode(
+    dual: bool, stop_source: Literal["head", "limit"]
+) -> None:
+    """A re-prefill stop must wait for decode to own request cleanup."""
     runner, request = make_runner(), make_request(dual=dual, task_type="tts")
     request_data = request.data
     if dual:
@@ -250,9 +254,17 @@ def test_prefill_stop_finishes_on_next_sync_decode(dual: bool) -> None:
         ) == (DS_STAGE_PATCH, 2)
         replay(runner, request)
     else:
-        request_data.state.variant = "base"
-    request_data.state.min_patches = 0
-    request_data.state.stop_threshold = 0.0
+        pass
+    if stop_source == "limit":
+        if not dual:
+            request_data.req.output_ids.append(prefill(runner, request))
+            replay(runner, request)
+        else:
+            pass
+        request_data.state.max_patches = len(request_data.latent_patches)
+    else:
+        request_data.state.min_patches = 0
+        request_data.state.stop_threshold = 0.0
     runner.prepare_flow_row.reset_mock()
     assert prefill(runner, request) == CONTROL_TOKEN_ID
     assert request_data.stop_pending and request_data.req.finished_reason is None
@@ -260,7 +272,10 @@ def test_prefill_stop_finishes_on_next_sync_decode(dual: bool) -> None:
     runner.before_decode(forward, None, [request])
     assert forward.input_embeds.shape == (1, 8)
     runner.post_decode(make_result(1), None, None, [request])
-    assert isinstance(request_data.req.finished_reason, FINISH_MATCHED_TOKEN)
+    assert isinstance(
+        request_data.req.finished_reason,
+        FINISH_LENGTH if stop_source == "limit" else FINISH_MATCHED_TOKEN,
+    )
     assert not request_data.stop_pending
     runner.prepare_flow_row.assert_not_called()
 

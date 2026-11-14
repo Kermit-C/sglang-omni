@@ -172,9 +172,7 @@ def preprocess_firered_tts3_payload(
         pass
     generation_parameters = FireRedTTS3GenerationOverrides.model_validate(
         {
-            "n_timesteps": resolve_number(
-                "n_timesteps", generation_defaults.get("n_timesteps", n_timesteps)
-            ),
+            "n_timesteps": resolve_number("n_timesteps", n_timesteps),
             "inference_cfg": resolve_number("inference_cfg", guidance_default),
             "stop_threshold": resolve_number(
                 "stop_threshold", generation_defaults.get("stop_threshold", 0.5)
@@ -195,7 +193,7 @@ def preprocess_firered_tts3_payload(
     request_state.inference_cfg = generation_parameters.inference_cfg
     request_state.stop_threshold = generation_parameters.stop_threshold
     request_state.min_patches = generation_parameters.min_patches
-    request_state.max_patches = generation_parameters.max_patches
+    request_state.max_patches = min(generation_parameters.max_patches, max_patches)
     request_state.seed = generation_parameters.seed
     request_state.stream = should_stream
     request_state.max_engine_tokens = int(

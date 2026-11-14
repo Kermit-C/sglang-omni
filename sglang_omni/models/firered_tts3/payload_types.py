@@ -42,11 +42,12 @@ class FireRedTTS3State(DeclarativeStateBase):
     language: str | None = None
     audio_in_path: str | None = None
     input_ids: list[int] = wire(default_factory=list, codec="list")
+    reference_pad_token_id: int | None = wire(None, codec="opt_int")
     # note (kermit): Missing legacy wire fields need fixed defaults independent of deployment settings.
     n_timesteps: int = wire(10, codec="int_or")
     inference_cfg: float = wire(2.0, codec="float")
     stop_threshold: float = wire(0.5, codec="float")
-    min_patches: int = wire(6, codec="int_or")
+    min_patches: int = wire(6, codec="int")
     max_patches: int = wire(400, codec="int_or")
     # note (kermit): A zero budget lets the request builder derive the decode limit.
     max_engine_tokens: int = wire(0, codec="int_or")
@@ -66,6 +67,18 @@ class FireRedTTS3State(DeclarativeStateBase):
     generated_latents: torch.Tensor | None = wire(None, codec="typed_tensor")
     gen_text: str | None = None
     finish_reason: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: object) -> FireRedTTS3State:
+        """Preserve zero minima while retaining null legacy field defaults."""
+        if not isinstance(data, dict):
+            return cls()
+        elif "min_patches" in data and data["min_patches"] is None:
+            data = dict(data)
+            data.pop("min_patches")
+        else:
+            pass
+        return super().from_dict(data)
 
 
 def load_firered_tts3_state(payload: StagePayload) -> FireRedTTS3State:

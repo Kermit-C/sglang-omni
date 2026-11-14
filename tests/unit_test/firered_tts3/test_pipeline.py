@@ -123,14 +123,16 @@ def test_checkpoint_config_drives_pipeline_topology(
     text_required: bool,
     dual_stream: bool,
 ) -> None:
-    (tmp_path / "config.json").write_text(
+    checkpoint_directory = tmp_path / "checkpoint@local"
+    checkpoint_directory.mkdir()
+    (checkpoint_directory / "config.json").write_text(
         json.dumps({"model_type": "fireredtts3", **markers}), encoding="utf-8"
     )
     register_fireredtts3_hf_config()
-    config = AutoConfig.from_pretrained(tmp_path, local_files_only=True)
+    config = AutoConfig.from_pretrained(checkpoint_directory, local_files_only=True)
     assert isinstance(config, FireRedTTS3Config)
     assert detect_fireredtts3_variant(config) == variant
-    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(checkpoint_directory))
     assert pipeline.variant == variant
     assert [stage.name for stage in pipeline.stages] == stage_names
     assert {stage.process for stage in pipeline.stages} == {"pipeline"}
@@ -145,14 +147,14 @@ def test_checkpoint_config_drives_pipeline_topology(
         / f"firered_tts3_{variant}.yaml"
     )
     resolved = resolve_sources(
-        model_path=str(tmp_path),
+        model_path=str(checkpoint_directory),
         config_file=str(config_path),
         text_only=False,
         variant=None,
         mem_fraction_static=None,
         argv=[],
     ).resolved.config
-    assert resolved.model_path == str(tmp_path)
+    assert resolved.model_path == str(checkpoint_directory)
     assert [stage.name for stage in resolved.stages] == stage_names
     service = import_string(pipeline.speech_request_validator_factory)(
         default_model="tts",
@@ -181,10 +183,10 @@ def test_unknown_checkpoint_variant_is_rejected() -> None:
         detect_fireredtts3_variant(FireRedTTS3Config())
 
 
-def test_firered_tts3_shares_generation_schedule_via_shared() -> None:
+def test_firered_tts3_shares_generation_schedule_via_shared(tmp_path: Path) -> None:
     """One shared entry feeds the schedule settings to both consumers."""
 
-    config = FireRedTTS3PipelineConfig(model_path="model")
+    config = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
     patches = patches_from_shared_block(
         [
             {
@@ -208,9 +210,11 @@ def test_firered_tts3_shares_generation_schedule_via_shared() -> None:
     }
 
 
-def test_firered_tts3_rejects_conflicting_preprocessing_schedule() -> None:
+def test_firered_tts3_rejects_conflicting_preprocessing_schedule(
+    tmp_path: Path,
+) -> None:
 
-    config_values = FireRedTTS3PipelineConfig(model_path="model").model_dump()
+    config_values = FireRedTTS3PipelineConfig(model_path=str(tmp_path)).model_dump()
     stages = {stage["name"]: stage for stage in config_values["stages"]}
     stages["talker"]["factory"] = {"n_timesteps": 10}
     stages["preprocessing"]["factory"] = {"n_timesteps": 8}
@@ -218,9 +222,9 @@ def test_firered_tts3_rejects_conflicting_preprocessing_schedule() -> None:
         FireRedTTS3PipelineConfig(**config_values)
 
 
-def test_firered_tts3_rejects_mismatched_vocoder_stream_slots() -> None:
+def test_firered_tts3_rejects_mismatched_vocoder_stream_slots(tmp_path: Path) -> None:
 
-    config_values = FireRedTTS3PipelineConfig(model_path="model").model_dump()
+    config_values = FireRedTTS3PipelineConfig(model_path=str(tmp_path)).model_dump()
     stages = {stage["name"]: stage for stage in config_values["stages"]}
     stages["talker"]["engine"]["max_running_requests"] = 8
     stages["vocoder"]["factory"]["stream_slots"] = 16
@@ -228,9 +232,9 @@ def test_firered_tts3_rejects_mismatched_vocoder_stream_slots() -> None:
         FireRedTTS3PipelineConfig(**config_values)
 
 
-def test_firered_tts3_rejects_tp() -> None:
+def test_firered_tts3_rejects_tp(tmp_path: Path) -> None:
 
-    config_values = FireRedTTS3PipelineConfig(model_path="model").model_dump()
+    config_values = FireRedTTS3PipelineConfig(model_path=str(tmp_path)).model_dump()
     stage = next(
         stage for stage in config_values["stages"] if stage["name"] == "talker"
     )
@@ -243,11 +247,12 @@ def test_firered_tts3_rejects_tp() -> None:
 
 def test_firered_tts3_model_registered_with_sglang(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.delitem(
         ModelRegistry.models, "FireRedTTS3ForConditionalGeneration", raising=False
     )
-    pipeline = FireRedTTS3PipelineConfig(model_path="model")
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
     builder = FireRedTTS3EngineBuilder(
         max_running_requests=pipeline.generation_admission_defaults()[
             "max_running_requests"
@@ -339,7 +344,7 @@ def test_firered_tts3_state_wire_round_trip() -> None:
                 "stop_threshold": 0,
                 "min_patches": 0,
             },
-            (10, 400, 0.0, 0.0, 6),
+            (10, 400, 0.0, 0.0, 0),
             420,
         ),
         (
