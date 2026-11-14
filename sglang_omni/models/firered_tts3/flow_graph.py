@@ -146,15 +146,13 @@ class FlowGraphRunner:
 
     def run(
         self,
-        hist_latents: torch.Tensor,  # [B, history, D]
-        x0: torch.Tensor,  # [B, patch, D]
-        cond: torch.Tensor,  # [B, history+patch, C]
-        cfgs: torch.Tensor,  # [B] or [B, 1, 1] fp32
+        history_latents: torch.Tensor,
+        initial_noise: torch.Tensor,
+        conditioning: torch.Tensor,
+        guidance_scales: torch.Tensor,
         n_timesteps: int,
     ) -> torch.Tensor | None:
         """One batched flow step via graph replay; None requests eager."""
-        history_latents, initial_noise = hist_latents, x0
-        conditioning, guidance_scales = cond, cfgs
         self.counters["calls"] += 1
         if (
             not self.enabled
@@ -229,20 +227,21 @@ class FlowGraphRunner:
         return entry.xt[:, -self.patch_size :][:batch_size].clone()
 
     @staticmethod
-    def pad_batch(t: torch.Tensor, pad: int) -> torch.Tensor:
-        batch, padding_size = t, pad
+    def pad_batch(batch: torch.Tensor, padding_size: int) -> torch.Tensor:
         return torch.cat(
             [batch, batch.new_zeros(padding_size, *batch.shape[1:])], dim=0
         )
 
     def capture(
         self,
-        hist_latents: torch.Tensor,
-        x0: torch.Tensor,
-        cond: torch.Tensor,
+        history_latents: torch.Tensor,
+        initial_noise: torch.Tensor,
+        conditioning: torch.Tensor,
     ) -> FlowGraphEntry | None:
         """Capture one whole-loop graph for the input shape, or return None."""
-        return self.graph_capture.capture(hist_latents, x0, cond, dit=self.dit)
+        return self.graph_capture.capture(
+            history_latents, initial_noise, conditioning, dit=self.dit
+        )
 
 
 __all__ = [

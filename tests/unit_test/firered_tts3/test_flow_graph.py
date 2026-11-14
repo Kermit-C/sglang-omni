@@ -30,18 +30,18 @@ def test_graph_replay_bit_exact_eager(tiny_dit: DiT, device: torch.device) -> No
         history_latents, noise_latents, conditioning = make_inputs(device, generator, 1)
         with torch.inference_mode():
             actual = runner.run(
-                hist_latents=history_latents,
-                x0=noise_latents,
-                cond=conditioning,
-                cfgs=guidance_scale,
+                history_latents=history_latents,
+                initial_noise=noise_latents,
+                conditioning=conditioning,
+                guidance_scales=guidance_scale,
                 n_timesteps=N_TIMESTEPS,
             )
             expected = euler_flow_loop(
                 dit=tiny_dit,
-                xt=torch.cat([history_latents, noise_latents], dim=1),
-                cond=conditioning,
+                flow_state=torch.cat([history_latents, noise_latents], dim=1),
+                conditioning=conditioning,
                 t_span=flow_t_span(N_TIMESTEPS, device),
-                cfg=guidance_scale,
+                guidance_scales=guidance_scale,
                 n_timesteps=N_TIMESTEPS,
                 patch_size=PATCH_SIZE,
             )
@@ -50,7 +50,9 @@ def test_graph_replay_bit_exact_eager(tiny_dit: DiT, device: torch.device) -> No
     stats = runner.stats()
     assert stats["calls"] == 3 and stats["captures"] == 1 and stats["hits"] == 2
     entry = runner.capture(
-        hist_latents=history_latents, x0=noise_latents, cond=conditioning
+        history_latents=history_latents,
+        initial_noise=noise_latents,
+        conditioning=conditioning,
     )
     assert entry is not None
     copied_entry = FlowGraphEntry(
@@ -59,7 +61,7 @@ def test_graph_replay_bit_exact_eager(tiny_dit: DiT, device: torch.device) -> No
     assert copied_entry.xt is entry.xt
     assert copied_entry.cond is entry.cond
     assert copied_entry.cfg is entry.cfg
-    padded = runner.pad_batch(t=history_latents, pad=1)
+    padded = runner.pad_batch(batch=history_latents, padding_size=1)
     assert torch.equal(padded[:1], history_latents)
     assert torch.count_nonzero(padded[1:]) == 0
 

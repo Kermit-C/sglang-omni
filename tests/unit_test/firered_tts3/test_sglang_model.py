@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 from unittest import mock
@@ -16,7 +17,17 @@ import sglang_omni.models.firered_tts3.engine_builder as engine_builder_module
 from sglang_omni.model_runner.sglang_model_runner import SGLModelRunner
 from sglang_omni.models.firered_tts3.config import FireRedTTS3PipelineConfig
 from sglang_omni.models.firered_tts3.engine_builder import FireRedTTS3EngineBuilder
+from sglang_omni.models.firered_tts3.request_builders import (
+    DS_STAGE_PATCH,
+    TEXT_MODE_AUDIO,
+    TEXT_MODE_TEXT,
+)
 from sglang_omni.models.firered_tts3.sglang_model import FireRedTTS3SGLangModel
+from tests.unit_test.fixtures.firered_tts3 import (
+    SmallFlowModel,
+    make_flow_request,
+    make_flow_runner,
+)
 
 HIDDEN_SIZE = 8
 BATCH_SIZE = 3
@@ -117,9 +128,86 @@ def test_forward_preserves_feedback_and_text_logits(
         assert output.next_token_logits.shape == (BATCH_SIZE, width)
 
 
+@pytest.mark.parametrize("with_buffer", [False, True])
+@pytest.mark.parametrize(
+    "device_type",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=[
+                pytest.mark.accelerator,
+                pytest.mark.skipif(
+                    not torch.cuda.is_available(), reason="CUDA is required"
+                ),
+            ],
+        ),
+    ],
+)
+def test_decode_embeddings_keep_token_ids_on_device(
+    with_buffer: bool, device_type: Literal["cpu", "cuda"]
+) -> None:
+    """Mixed decode previously read every text token back as a Python scalar."""
+    model = SmallFlowModel().to(device=device_type)
+    runner = make_flow_runner(model)
+    feedback_embeddings = (
+        torch.arange(2 * HIDDEN_SIZE, device=device_type)
+        .reshape(2, HIDDEN_SIZE)
+        .float()
+    )
+    token_ids = torch.tensor([17, 0, 17, 0, 0, 99], device=device_type)
+    expected_embeddings = model.get_input_embeddings()(token_ids).detach()
+    expected_embeddings[1], expected_embeddings[3], expected_embeddings[4] = (
+        feedback_embeddings[0],
+        feedback_embeddings[1],
+        0,
+    )
+    model.graph_feedback_buffer = (
+        torch.empty_like(expected_embeddings) if with_buffer else None
+    )
+    for reverse_order in (False, True):
+        requests = [make_flow_request(index) for index in range(len(token_ids))]
+        for request in requests:
+            request.data.text_ar_mode = TEXT_MODE_TEXT
+        requests[1].data.text_ar_mode = TEXT_MODE_AUDIO
+        requests[1].data.pending_feedback_queue.append(feedback_embeddings[0])
+        requests[3].data.dual_stream = True
+        requests[3].data.dual_stream_stage = DS_STAGE_PATCH
+        requests[3].data.pending_feedback_queue.append(feedback_embeddings[1])
+        requests[4].data.text_ar_mode = TEXT_MODE_AUDIO
+        requests[4].data.stop_pending = True
+        requests[5].data.dual_stream = True
+        if reverse_order:
+            requests.reverse()
+            input_ids = token_ids.flip(0)
+            expected_embedding_rows = expected_embeddings.flip(0)
+        else:
+            input_ids = token_ids
+            expected_embedding_rows = expected_embeddings
+        forward_batch = SimpleNamespace(input_ids=input_ids)
+        with (
+            torch.inference_mode(),
+            torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU]
+            ) as embedding_profile,
+        ):
+            runner.before_decode(forward_batch, None, requests)
+        actual_embeddings = (
+            model.graph_feedback_buffer if with_buffer else forward_batch.input_embeds
+        )
+        torch.testing.assert_close(
+            actual_embeddings, expected_embedding_rows, rtol=0, atol=0
+        )
+        assert all(not request.data.pending_feedback_queue for request in requests)
+        assert all(
+            profile_event.key != "aten::_local_scalar_dense"
+            for profile_event in embedding_profile.key_averages()
+        )
+
+
 @pytest.fixture
-def engine_builder() -> FireRedTTS3EngineBuilder:
-    pipeline = FireRedTTS3PipelineConfig(model_path="model")
+def engine_builder(tmp_path: Path) -> FireRedTTS3EngineBuilder:
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
     return FireRedTTS3EngineBuilder(
         max_running_requests=pipeline.generation_admission_defaults()[
             "max_running_requests"
@@ -263,8 +351,9 @@ def test_compile_locks_updates_before_creating_execution(
 
 def test_disabled_flow_graph_does_not_lock_weight_loading(
     loadable_model: FireRedTTS3SGLangModel,
+    tmp_path: Path,
 ) -> None:
-    pipeline = FireRedTTS3PipelineConfig(model_path="model")
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
     builder = FireRedTTS3EngineBuilder(
         max_running_requests=pipeline.generation_admission_defaults()[
             "max_running_requests"

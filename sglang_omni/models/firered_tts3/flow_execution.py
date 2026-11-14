@@ -105,10 +105,10 @@ def flow_t_span(n_timesteps: int, device: torch.device) -> torch.Tensor:
 
 def euler_flow_loop(
     dit: torch.nn.Module | CompiledDiTExecutor,
-    xt: torch.Tensor,
-    cond: torch.Tensor,
+    flow_state: torch.Tensor,
+    conditioning: torch.Tensor,
     t_span: torch.Tensor,
-    cfg: torch.Tensor,
+    guidance_scales: torch.Tensor,
     n_timesteps: int,
     patch_size: int,
     *,
@@ -119,7 +119,6 @@ def euler_flow_loop(
 ) -> torch.Tensor:
     """Integrate the flow state in place and return its patch tail."""
     assert n_timesteps > 0, "Flow requires a positive timestep count"
-    flow_state, conditioning, guidance_scales = xt, cond, cfg
     batch_size = flow_state.shape[0]
     for timestep_index in range(n_timesteps):
         t = t_span[timestep_index]

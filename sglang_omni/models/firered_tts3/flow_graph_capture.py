@@ -93,9 +93,9 @@ class FlowGraphCapture:
         modes: tuple[TorchDispatchMode, ...] = ()
 
         def body(
-            state: torch.Tensor,
-            condition: torch.Tensor,
-            scales: torch.Tensor,
+            flow_state: torch.Tensor,
+            conditioning: torch.Tensor,
+            guidance_scales: torch.Tensor,
             active_modes: tuple[TorchDispatchMode, ...],
             *,
             observed: bool = False,
@@ -107,10 +107,10 @@ class FlowGraphCapture:
             ffn_hits_before = active_ffn.hits if active_ffn is not None else 0
             result = euler_flow_loop(
                 dit,
-                state,
-                condition,
+                flow_state,
+                conditioning,
                 self.t_span,
-                scales,
+                guidance_scales,
                 self.n_timesteps,
                 self.patch_size,
                 dit_dtype=self.dit_dtype,
@@ -133,7 +133,9 @@ class FlowGraphCapture:
                 pass
             if active_ffn is not None:
                 expected_hit_count = (
-                    active_ffn.expected_hits(2 * state.shape[0] * state.shape[1])
+                    active_ffn.expected_hits(
+                        2 * flow_state.shape[0] * flow_state.shape[1]
+                    )
                     * self.n_timesteps
                 )
                 if (
@@ -182,9 +184,18 @@ class FlowGraphCapture:
             nonlocal conv_mode
             conv_mode = active_conv
             candidate_modes = time_modes + (active_conv,)
-            for probe_index, (state, condition, scales, expected) in enumerate(probes):
+            for probe_index, (
+                probe_flow_state,
+                probe_conditioning,
+                probe_guidance_scales,
+                expected,
+            ) in enumerate(probes):
                 actual = body(
-                    state.clone(), condition, scales, candidate_modes, observed=True
+                    probe_flow_state.clone(),
+                    probe_conditioning,
+                    probe_guidance_scales,
+                    candidate_modes,
+                    observed=True,
                 )
                 check_precision(
                     "convolution", actual, expected, self.precision_gate, probe_index
@@ -323,15 +334,15 @@ class FlowGraphCapture:
                             ffn_mode.validate_weights()
                             modes = (*base_modes, ffn_mode)
                             for probe_index, (
-                                state,
-                                condition,
-                                scales,
+                                probe_flow_state,
+                                probe_conditioning,
+                                probe_guidance_scales,
                                 expected,
                             ) in enumerate(probes):
                                 actual = body(
-                                    state.clone(),
-                                    condition,
-                                    scales,
+                                    probe_flow_state.clone(),
+                                    probe_conditioning,
+                                    probe_guidance_scales,
                                     modes,
                                     observed=True,
                                 )
@@ -340,9 +351,9 @@ class FlowGraphCapture:
                                     and time_mode is not None
                                 ):
                                     uncached = body(
-                                        state.clone(),
-                                        condition,
-                                        scales,
+                                        probe_flow_state.clone(),
+                                        probe_conditioning,
+                                        probe_guidance_scales,
                                         tuple(
                                             mode
                                             for mode in modes

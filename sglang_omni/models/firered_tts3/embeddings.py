@@ -223,7 +223,8 @@ def materialize_decode_embeddings(
     requests: list[SchedulerRequest],
 ) -> None:
     """Stage feedback and text embeddings in upcoming batch row order."""
-    embedding_rows = []
+    embedding_rows: list[torch.Tensor] = []
+    text_embeddings: torch.Tensor | None = None
     for request_row_index, request in enumerate(requests):
         request_data = scheduler_request_data(request)
         feed_is_patch = (
@@ -250,16 +251,13 @@ def materialize_decode_embeddings(
             else:
                 raise RuntimeError("FireRedTTS3 decode is missing its latent feedback")
         else:
-            token_id = int(forward_batch.input_ids[request_row_index])
-            embedding_rows.append(
-                model.get_input_embeddings()(
-                    torch.tensor(
-                        [token_id],
-                        dtype=torch.long,
-                        device=forward_batch.input_ids.device,
-                    )
-                )[0]
-            )
+            if text_embeddings is None:
+                text_embeddings = model.get_input_embeddings()(
+                    forward_batch.input_ids[: len(requests)]
+                )
+            else:
+                pass
+            embedding_rows.append(text_embeddings[request_row_index])
     feedback_buffer = model.graph_feedback_buffer
     if feedback_buffer is not None:
         # note (kermit): Decode graphs read this persistent buffer rather than input_embeds.

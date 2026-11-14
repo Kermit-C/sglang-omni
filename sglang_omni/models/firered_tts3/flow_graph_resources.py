@@ -91,9 +91,9 @@ class FlowGraphEntry:
 class FlowCaptureBody(Protocol):
     def __call__(
         self,
-        state: torch.Tensor,
-        condition: torch.Tensor,
-        scales: torch.Tensor,
+        flow_state: torch.Tensor,
+        conditioning: torch.Tensor,
+        guidance_scales: torch.Tensor,
         active_modes: tuple[TorchDispatchMode, ...],
         *,
         observed: bool = False,
@@ -139,11 +139,11 @@ def prepare_flow_probes(
     generator = torch.Generator(device=flow_state.device).manual_seed(41729)
     for probe in range(3):
         if probe == 0:
-            probe_state = torch.zeros_like(flow_state)
+            probe_flow_state = torch.zeros_like(flow_state)
             probe_conditioning = torch.zeros_like(conditioning)
-            probe_scales = torch.zeros_like(guidance_scales)
+            probe_guidance_scales = torch.zeros_like(guidance_scales)
         else:
-            probe_state = torch.randn(
+            probe_flow_state = torch.randn(
                 flow_state.shape,
                 device=flow_state.device,
                 dtype=flow_state.dtype,
@@ -155,20 +155,30 @@ def prepare_flow_probes(
                 dtype=conditioning.dtype,
                 generator=generator,
             )
-            probe_scales = torch.full_like(guidance_scales, 1.2 if probe == 1 else 2.0)
-        expected = body(probe_state.clone(), probe_conditioning, probe_scales, ())
-        probes.append((probe_state, probe_conditioning, probe_scales, expected))
+            probe_guidance_scales = torch.full_like(
+                guidance_scales, 1.2 if probe == 1 else 2.0
+            )
+        expected = body(
+            probe_flow_state.clone(), probe_conditioning, probe_guidance_scales, ()
+        )
+        probes.append(
+            (probe_flow_state, probe_conditioning, probe_guidance_scales, expected)
+        )
         observed = body(
-            probe_state.clone(), probe_conditioning, probe_scales, (), observed=True
+            probe_flow_state.clone(),
+            probe_conditioning,
+            probe_guidance_scales,
+            (),
+            observed=True,
         )
         check_flow_precision(
             "observed", observed, expected, strict_gate, probe, flow_state.shape[0]
         )
         if time_mode is not None:
             cached_time = body(
-                probe_state.clone(),
+                probe_flow_state.clone(),
                 probe_conditioning,
-                probe_scales,
+                probe_guidance_scales,
                 (time_mode,),
                 observed=True,
             )
@@ -231,10 +241,15 @@ class FlowGraphResources:
                 observed=bool(active_modes),
             )
         if gate is not None:
-            for probe, (state, condition, scales, expected) in enumerate(probes):
-                flow_state.copy_(state)
-                conditioning.copy_(condition)
-                guidance_scales.copy_(scales)
+            for probe, (
+                probe_flow_state,
+                probe_conditioning,
+                probe_guidance_scales,
+                expected,
+            ) in enumerate(probes):
+                flow_state.copy_(probe_flow_state)
+                conditioning.copy_(probe_conditioning)
+                guidance_scales.copy_(probe_guidance_scales)
                 graph.replay()
                 check_flow_precision(
                     "replay",

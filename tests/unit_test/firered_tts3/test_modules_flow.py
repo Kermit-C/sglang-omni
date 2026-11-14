@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -56,7 +58,7 @@ def test_flow_rejects_nonpositive_timestep_count(n_timesteps: int) -> None:
         )
 
 
-def test_flow_mode_validation() -> None:
+def test_flow_mode_validation(tmp_path: Path) -> None:
     dit = tiny_cpu_dit()
     with pytest.raises(ValueError, match="unknown flow mode"):
         legacy_prepare_flow_dit(dit, "compile-bf16")
@@ -71,7 +73,7 @@ def test_flow_mode_validation() -> None:
             mode="fp16",
         )
     with pytest.raises(ValueError, match="flow_mode"):
-        pipeline = FireRedTTS3PipelineConfig(model_path="model")
+        pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path))
         FireRedTTS3EngineBuilder(
             max_running_requests=pipeline.generation_admission_defaults()[
                 "max_running_requests"
