@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Literal
 from unittest import mock
@@ -32,12 +33,13 @@ from sglang_omni.utils.json import JsonValue
     ],
 )
 def test_speech_parameters_rejected_before_generation(
+    tmp_path: Path,
     variant: FireRedTTS3Variant,
     extra_params: dict[str, JsonValue] | list[int],
     delivery: Literal["single", "batch"],
 ) -> None:
     """Invalid model parameters must return 400 before any backend dispatch."""
-    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant=variant)
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path), variant=variant)
     backend = mock.create_autospec(Client, instance=True)
     client = TestClient(
         create_app(
@@ -88,12 +90,13 @@ def test_speech_parameters_rejected_before_generation(
     ],
 )
 def test_invalid_generation_overrides_are_rejected_at_http_boundary(
+    tmp_path: Path,
     overrides: dict[str, JsonValue],
     parameter_path: str,
     delivery: Literal["single", "batch"],
 ) -> None:
     """Invalid Flow requests must fail before launching model inference."""
-    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant="speaker")
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path), variant="speaker")
     backend = mock.create_autospec(Client, instance=True)
     client = TestClient(
         create_app(
@@ -120,8 +123,10 @@ def test_invalid_generation_overrides_are_rejected_at_http_boundary(
     backend.generate.assert_not_called()
 
 
-def test_http_generation_override_validation_uses_preprocessing_precedence() -> None:
-    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant="speaker")
+def test_http_generation_override_validation_uses_preprocessing_precedence(
+    tmp_path: Path,
+) -> None:
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path), variant="speaker")
     service = import_string(pipeline.speech_request_validator_factory)(
         default_model="tts"
     )
@@ -162,9 +167,9 @@ def test_reference_audio_rejects_invalid_bare_path(
     assert failure.value.param == "ref_audio"
 
 
-def test_speaker_rejects_reference_audio() -> None:
+def test_speaker_rejects_reference_audio(tmp_path: Path) -> None:
     """Speaker-token checkpoints must reject references at the API boundary."""
-    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant="speaker")
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path), variant="speaker")
     service = import_string(pipeline.speech_request_validator_factory)(
         default_model="tts"
     )
@@ -181,9 +186,9 @@ def test_speaker_rejects_reference_audio() -> None:
 
 
 @pytest.mark.parametrize("task_type", ["semantic_edit", "AcousticEdit"])
-def test_editing_policy_is_scoped_to_firered(task_type: str) -> None:
+def test_editing_policy_is_scoped_to_firered(tmp_path: Path, task_type: str) -> None:
     """FireRed editing must not enable empty input or native speed for other models."""
-    pipeline = FireRedTTS3PipelineConfig(model_path="model", variant="instruct")
+    pipeline = FireRedTTS3PipelineConfig(model_path=str(tmp_path), variant="instruct")
     editing = import_string(pipeline.speech_request_validator_factory)(
         default_model="tts"
     )
@@ -200,3 +205,63 @@ def test_editing_policy_is_scoped_to_firered(task_type: str) -> None:
     assert failure.value.param == "task_type"
     prepared = generic.parse_generation_request({"input": "hello", "speed": 0.8})
     assert generic.resolve_encode_speed(prepared.request) == 0.8
+
+
+@pytest.mark.parametrize(
+    "variant,markers",
+    [
+        ("base", {"spk_in_dim": 512}),
+        ("instruct", {"use_lm_head": True}),
+        ("speaker", {"text_latent_interleave_ratio": [2, 1]}),
+    ],
+)
+def test_remote_checkpoint_revision_selects_reference_validation(
+    tmp_path: Path,
+    variant: FireRedTTS3Variant,
+    markers: dict[str, JsonValue],
+) -> None:
+    """Remote Instruct metadata must permit VoiceDesign without Base references."""
+    metadata_path = tmp_path / "config.json"
+    metadata_path.write_text(json.dumps(markers), encoding="utf-8")
+    model_path = f"test/checkpoint@{variant}-revision"
+    with mock.patch(
+        "sglang_omni.models.firered_tts3.hf_config.hf_hub_download",
+        return_value=str(metadata_path),
+        create=True,
+    ) as download_metadata:
+        pipeline = FireRedTTS3PipelineConfig(model_path=model_path)
+        assert pipeline.variant == variant
+        download_metadata.assert_called_once_with(
+            repo_id="test/checkpoint",
+            filename="config.json",
+            revision=f"{variant}-revision",
+        )
+        if variant == "instruct":
+            with pytest.raises(ValueError, match="pinned variant"):
+                FireRedTTS3PipelineConfig(model_path=model_path, variant="base")
+        else:
+            pass
+    service = import_string(pipeline.speech_request_validator_factory)(
+        default_model="tts",
+        required_speech_reference_count=pipeline.required_speech_reference_count,
+        speech_reference_text_required=pipeline.speech_reference_text_required,
+    )
+    if variant == "base":
+        with pytest.raises(SpeechAPIError, match="reference"):
+            service.parse_request({"input": "Hello."})
+    elif variant == "instruct":
+        request = service.parse_request(
+            {
+                "input": "Hello.",
+                "task_type": "VoiceDesign",
+                "instructions": "A warm voice.",
+            }
+        )
+        assert request.task_type == "VoiceDesign"
+    else:
+        request = service.parse_request({"input": "Hello."})
+        assert request.input == "Hello."
+        with pytest.raises(SpeechAPIError, match="does not accept"):
+            service.parse_request(
+                {"input": "Hello.", "ref_audio": "data:audio/wav;base64,UklGRg=="}
+            )

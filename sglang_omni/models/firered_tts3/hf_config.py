@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
+from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, PretrainedConfig
 
 from sglang_omni.utils.json import JsonValue
@@ -17,12 +18,29 @@ FireRedTTS3Variant = Literal["base", "instruct", "speaker"]
 
 
 def load_checkpoint_hf_config(model_path: str) -> FireRedTTS3Config | None:
-    """Read a local checkpoint config, or defer detection for non-local paths."""
-    config_path = Path(model_path).expanduser() / "config.json"
-    if not config_path.is_file():
+    """Read local or revision-pinned remote checkpoint metadata."""
+    if not model_path:
         return None
     else:
         pass
+    checkpoint_directory = Path(model_path).expanduser()
+    if (
+        checkpoint_directory.is_dir()
+        or checkpoint_directory.is_absolute()
+        or model_path.startswith(("./", "../"))
+    ):
+        config_path = checkpoint_directory / "config.json"
+        if not config_path.is_file():
+            return None
+        else:
+            pass
+    else:
+        repository_id, _, revision = model_path.partition("@")
+        config_path = Path(
+            hf_hub_download(
+                repo_id=repository_id, filename="config.json", revision=revision or None
+            )
+        )
     with config_path.open(encoding="utf-8") as handle:
         return FireRedTTS3Config(**json.load(handle))
 

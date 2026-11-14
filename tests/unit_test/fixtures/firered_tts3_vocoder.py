@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TypedDict
 
 import pytest
@@ -167,7 +168,7 @@ def make_streaming_vocoder(
     sample_rate: int,
     **overrides: Unpack[StreamingVocoderOverrides],
 ) -> FireRedTTS3StreamingVocoder:
-    configuration = FireRedTTS3PipelineConfig(model_path="model")
+    configuration = FireRedTTS3PipelineConfig(model_path=str(Path(__file__).parent))
     factory_parameters = configuration.stage_factory_kwargs("vocoder")
     factory_parameters.pop("warmup_on_init")
     return FireRedTTS3StreamingVocoder(
